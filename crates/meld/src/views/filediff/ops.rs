@@ -125,6 +125,8 @@ impl FileDiff {
             edit: edit.clone(),
         });
         self.edit_comparison(pane, &edit, before);
+        // An unnamed pane guesses its language from the text (S2).
+        self.panes[pane].refresh_auto_language();
         self.after_change();
     }
 
@@ -186,7 +188,7 @@ impl FileDiff {
 
     /// Replays edits made by the comparison (chunk actions, merges) on
     /// the widget buffer, as one undo step.
-    fn apply_outcome(&mut self, outcome: EditOutcome) {
+    pub(super) fn apply_outcome(&mut self, outcome: EditOutcome) {
         let pane = outcome.pane;
         self.undo.begin_group();
         for applied in &outcome.edits {
@@ -202,6 +204,8 @@ impl FileDiff {
             );
         }
         self.undo.end_group();
+        // An unnamed pane guesses its language from the text (S2).
+        self.panes[pane].refresh_auto_language();
         self.check_sync(pane);
     }
 
@@ -467,7 +471,7 @@ impl FileDiff {
 
     // ----- Undo -----
 
-    fn undo_redo(&mut self, redo: bool) {
+    pub(super) fn undo_redo(&mut self, redo: bool) {
         if self.cmp.is_none() || self.job.is_some() {
             return;
         }
@@ -479,6 +483,7 @@ impl FileDiff {
         let Some(actions) = actions else {
             return;
         };
+        let mut touched = Vec::new();
         for action in actions {
             let edit = if redo {
                 action.edit.clone()
@@ -488,9 +493,19 @@ impl FileDiff {
             let pane = action.pane;
             let before = self.panes[pane].buffer.line_count().max(1);
             match self.panes[pane].buffer.apply(&edit) {
-                Ok(()) => self.edit_comparison(pane, &edit, before),
+                Ok(()) => {
+                    self.edit_comparison(pane, &edit, before);
+                    if !touched.contains(&pane) {
+                        touched.push(pane);
+                    }
+                }
                 Err(err) => log::error!("undo failed: {err}"),
             }
+        }
+        // Undoing back to empty must stop highlighting an unnamed pane
+        // and keep the rest in step with the buffer (S2, S4).
+        for pane in touched {
+            self.panes[pane].refresh_auto_language();
         }
         self.after_change();
     }
@@ -1273,6 +1288,8 @@ impl FileDiff {
         }
         self.undo.end_group();
         self.panes[pane].buffer.set_cursor(cursor, false);
+        // The replaced text may look like a different language (S2).
+        self.panes[pane].refresh_auto_language();
         self.after_change();
     }
 
@@ -1764,12 +1781,14 @@ impl FileDiff {
                 if let Some(Dialog::Language { pane, .. }) = self.dialog.take()
                     && let Some(p) = self.panes.get_mut(pane)
                 {
-                    p.language = lang;
-                    p.language_chosen = true;
-                    p.highlighter = match lang {
-                        Some(id) => meld_widgets::Highlighter::for_language(id),
-                        None => meld_widgets::Highlighter::plain(),
-                    };
+                    p.choose_language(lang);
+                }
+            }
+            DialogMessage::AutoDetectLanguage => {
+                if let Some(Dialog::Language { pane, .. }) = self.dialog.take()
+                    && let Some(p) = self.panes.get_mut(pane)
+                {
+                    p.use_auto_detect();
                 }
             }
         }

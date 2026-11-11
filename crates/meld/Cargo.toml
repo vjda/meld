@@ -31,3 +31,4 @@ image = "0.25"
 resvg = "0.45"
 regex.workspace = true
 encoding_rs.workspace = true
+betlang = "0.1.1"

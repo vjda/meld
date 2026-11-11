@@ -38,6 +38,7 @@
 //!   `command`, `view`, `toolbar`, `menu_items`, `unsaved`,
 //!   `request_close`, `settings_changed` and `subscription`.
 
+mod auto_language;
 mod chunks;
 mod dialogs;
 mod edits;
@@ -68,6 +69,7 @@ use crate::shared::Shared;
 use crate::ui::{BannerKind, menu};
 use crate::views::Event;
 
+use auto_language::Detected;
 use chunks::{CursorDetails, Derived};
 use find::{FindBar, FindMessage};
 
@@ -300,6 +302,70 @@ impl Pane {
             flashes: Vec::new(),
         }
     }
+
+    /// Whether the pane's language comes from its content: it has no file
+    /// to guess from and the user has not picked a language (S2).
+    fn auto_detects(&self) -> bool {
+        self.file.path.is_none() && !self.language_chosen
+    }
+
+    /// Sets the highlighted language, leaving the detection mode alone.
+    fn set_language(&mut self, language: Option<&'static str>) {
+        self.language = language;
+        self.highlighter = match language {
+            Some(id) => Highlighter::for_language(id),
+            None => Highlighter::plain(),
+        };
+    }
+
+    /// Applies a language picked in the language selector: any choice,
+    /// Plain Text included, stops content detection until Auto-detect
+    /// (S2, S4).
+    fn choose_language(&mut self, language: Option<&'static str>) {
+        self.language_chosen = true;
+        self.set_language(language);
+    }
+
+    /// The language the pane's text looks like (S1, S3, S8).
+    fn detected_language(&self) -> Detected {
+        auto_language::detect_lines(self.buffer.lines())
+    }
+
+    /// Applies a detection. `Unknown` leaves the current language alone,
+    /// so typing through an ambiguous moment does not flicker (S4, S9).
+    fn apply_detected(&mut self, detected: Detected) {
+        let language = match detected {
+            Detected::Language(id) => Some(id),
+            Detected::Plain => None,
+            Detected::Unknown => return,
+        };
+        if self.language != language {
+            self.set_language(language);
+        }
+    }
+
+    /// Re-detects the language after the pane's text changed (S2).
+    fn refresh_auto_language(&mut self) {
+        if self.auto_detects() {
+            self.apply_detected(self.detected_language());
+        }
+    }
+
+    /// Turns content detection back on and detects now (Auto-detect, S2).
+    ///
+    /// Only unnamed panes have a language to detect; a file-backed pane keeps
+    /// the language of its file.
+    fn use_auto_detect(&mut self) {
+        if self.file.path.is_none() {
+            self.language_chosen = false;
+            // A language picked by hand is not evidence, so inconclusive text
+            // goes back to plain text (S4) instead of keeping it.
+            self.apply_detected(match self.detected_language() {
+                Detected::Unknown => Detected::Plain,
+                detected => detected,
+            });
+        }
+    }
 }
 
 /// A fading highlight being animated (`TextviewLineAnimation`).
@@ -478,6 +544,8 @@ pub enum DialogMessage {
     Filter(String),
     PickEncoding(&'static str),
     PickLanguage(Option<&'static str>),
+    /// Turn content detection back on in an unnamed pane (S2).
+    AutoDetectLanguage,
 }
 
 #[derive(Debug, Clone)]
@@ -576,8 +644,24 @@ pub struct FileDiff {
 
 impl FileDiff {
     fn with_panes(num_panes: usize, shared: &Shared) -> Self {
+        let mut diff = Self::with_settings(
+            num_panes,
+            &shared.settings,
+            Metrics::new(shared.mono_size()),
+            shared.mono_font(),
+        );
+        diff.refresh_styles(shared);
+        diff
+    }
+
+    /// Panes and view state for `settings`, before styles are resolved.
+    fn with_settings(
+        num_panes: usize,
+        settings: &meld_config::Settings,
+        metrics: Metrics,
+        font: Font,
+    ) -> Self {
         let n = num_panes.clamp(1, 3);
-        let settings = &shared.settings;
         let view_options = ViewOptions {
             show_line_numbers: settings.show_line_numbers,
             show_whitespace: settings.enable_space_drawer,
@@ -619,8 +703,8 @@ impl FileDiff {
             highlight_syntax: settings.highlight_syntax,
             lock_scrolling: false,
             overwrite: false,
-            metrics: Metrics::new(shared.mono_size()),
-            font: shared.mono_font(),
+            metrics,
+            font,
             styles: Vec::new(),
             link_style: PaneStyle::default(),
             tab_width: settings.indent_width.max(1) as usize,
@@ -637,12 +721,31 @@ impl FileDiff {
             focus_colors: Vec::new(),
             spinner: 0,
         };
-        diff.refresh_styles(shared);
         for pane in &mut diff.panes {
             pane.buffer
                 .set_indentation(diff.tab_width, diff.insert_spaces);
         }
         diff.refresh_wraps();
+        diff
+    }
+
+    /// An empty comparison with unnamed, editable panes and default
+    /// settings, for tests of pane behaviour.
+    #[cfg(test)]
+    fn for_test(num_panes: usize) -> Self {
+        let mut diff = Self::with_settings(
+            num_panes,
+            &meld_config::Settings::default(),
+            Metrics::new(14.0),
+            Font::MONOSPACE,
+        );
+        let buffers: Vec<TextBuffer> = (0..diff.panes.len())
+            .map(|_| TextBuffer::from_text(""))
+            .collect();
+        diff.cmp = FileComparison::new_cancellable(buffers, Vec::new(), false, &|| false)
+            .ok()
+            .map(|(cmp, _)| cmp);
+        diff.refresh_read_only();
         diff
     }
 
