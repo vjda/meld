@@ -1,19 +1,18 @@
 //! Content-based language detection for panes without a file (S1–S4, S8–S9).
 //!
-//! A pane with no path has no file name to guess a syntax from, so the
-//! text itself is the only evidence. [`betlang`] ranks 48 source
-//! languages with a small embedded model; Meld trusts its top choice only
-//! when it is confident (a score of at least [`MIN_SCORE`]), keeps the
-//! current highlighting when it is not (S4: no evidence is plain text, and
-//! an in-progress document must not flicker between guesses) and stops
-//! highlighting when the pane is empty.
+//! A pane with no path has no file name to guess a syntax from, so the text
+//! itself is the only evidence. [`betlang`] ranks 48 source languages with a
+//! small embedded model; Meld trusts its top choice only when it is confident
+//! (a score of at least [`MIN_SCORE`]), keeps the current highlighting when it
+//! is not (S4: no evidence is plain text, and an in-progress document must not
+//! flicker between guesses) and stops highlighting when the pane is empty.
 //!
-//! Only languages in [`LANGUAGES`] switch the highlighting, so a label
-//! Meld cannot highlight leaves the pane as it is. S3 asks for YAML, JSON
-//! and Markdown; S11 covers the rest of the detector's labels wherever
-//! Meld has a highlighting mode for the same language, so what stays
-//! unmapped is a documented gap either in Meld's language table or in this
-//! build's syntax set (unnamed labels and prose stay plain text).
+//! Only languages in [`LANGUAGES`] switch the highlighting, so a label Meld
+//! cannot highlight leaves the pane as it is: S3 asks for YAML, JSON and
+//! Markdown, S11 covers the rest of the detector's labels wherever Meld has a
+//! highlighting mode for the same language, and what stays unmapped is a
+//! documented gap either in Meld's language table or in this build's syntax
+//! set (unnamed labels and prose stay plain text).
 //!
 //! Model and licence: `betlang` 0.1.1 is MIT licensed and embeds a
 //! distilled model trained from Google's [Magika] (Apache-2.0). Detection
@@ -233,65 +232,30 @@ mod tests {
     /// A CSV table, which has no detector label and no Meld mode.
     const CSV: &str = "id,name,enabled\n1,alpha,true\n2,beta,false\n3,gamma,true\n";
 
-    // One canonical short program or config per language S11 added to the
-    // mapping: a real file, not a fragment, so the smoke tests measure the
-    // same gate the editor uses.
-
-    /// A C program.
+    // One canonical short file per language S11 added to the mapping (see
+    // `SMOKE`): a real file, not a fragment, so the smoke rows measure the
+    // same gate the editor uses. Objective-C and PHP need a whole class:
+    // their fragments score below the gate.
     const C: &str = "#include <stdio.h>\n\nint main(void) {\n    printf(\"hello, world\\n\");\n    return 0;\n}\n";
-
-    /// A C++ program.
     const CPP: &str = "#include <iostream>\n\nint main() {\n    std::cout << \"hello\" << std::endl;\n    return 0;\n}\n";
-
-    /// A C# program.
     const CS: &str = "using System;\n\nnamespace Demo {\n    public class Program {\n        static void Main() {\n            Console.WriteLine(\"hi from .NET\");\n        }\n    }\n}\n";
-
-    /// A CSS stylesheet.
     const CSS: &str = "body {\n  margin: 0;\n  font-family: sans-serif;\n}\n\n.btn { color: #333; padding: 4px 8px; }\n";
-
-    /// A shell script.
     const SHELL: &str =
         "#!/bin/sh\nset -eu\n\nfor f in *.txt; do\n    echo \"processing $f\"\ndone\n";
-
-    /// A SQL script.
     const SQL: &str = "CREATE TABLE users (\n    id INTEGER PRIMARY KEY,\n    name TEXT NOT NULL\n);\n\nSELECT id, name FROM users WHERE active = 1 ORDER BY name;\n";
-
-    /// A Ruby class.
     const RUBY: &str = "class Greeter\n  def initialize(name)\n    @name = name\n  end\n\n  def greet\n    puts \"Hello, #{@name}!\"\n  end\nend\n\nGreeter.new(\"world\").greet\n";
-
-    /// A PHP class.
     const PHP: &str = "<?php\n\nclass Greeter\n{\n    public function __construct(private string $name)\n    {\n    }\n\n    public function greet(): string\n    {\n        return 'Hello, ' . $this->name . '!';\n    }\n}\n\necho (new Greeter('world'))->greet();\n";
-
-    /// A Perl script.
     const PERL: &str = "use strict;\nuse warnings;\n\nmy @files = glob(\"*.txt\");\nforeach my $f (@files) {\n    print \"found $f\\n\";\n}\n";
-
-    /// A Lua script.
     const LUA: &str =
         "local function greet(name)\n    print(\"Hello, \" .. name)\nend\n\ngreet(\"world\")\n";
-
-    /// A Haskell module.
     const HASKELL: &str = "module Main where\n\nmain :: IO ()\nmain = do\n    let xs = [1 .. 10]\n    print (sum xs)\n";
-
-    /// An OCaml module.
     const OCAML: &str = "let rec fact n =\n  if n <= 1 then 1\n  else n * fact (n - 1)\n\nlet () = print_int (fact 5)\n";
-
-    /// An Objective-C class.
     const OBJC: &str = "#import <Foundation/Foundation.h>\n\n@interface Greeter : NSObject\n\n@property (nonatomic, copy) NSString *name;\n\n- (instancetype)initWithName:(NSString *)name;\n- (NSString *)greet;\n\n@end\n\n@implementation Greeter\n\n- (instancetype)initWithName:(NSString *)name\n{\n    self = [super init];\n    if (self) {\n        _name = [name copy];\n    }\n    return self;\n}\n\n- (NSString *)greet\n{\n    return [NSString stringWithFormat:@\"Hello, %@!\", self.name];\n}\n\n@end\n";
-
-    /// An Erlang module.
     const ERLANG: &str = "-module(greet).\n-export([hello/1]).\n\nhello(Name) ->\n    io:format(\"Hello, ~s!~n\", [Name]).\n";
-
-    /// A Windows batch script.
     const BATCH: &str =
         "@echo off\nsetlocal\n\nfor %%f in (*.txt) do (\n    echo Processing %%f\n)\n\nendlocal\n";
-
-    /// An R script.
     const R: &str = "data <- read.csv(\"values.csv\")\nsummary(data)\nmean(data$value, na.rm = TRUE)\nplot(data$value, type = \"l\")\n";
-
-    /// A Scala program.
     const SCALA: &str = "object Main extends App {\n  val values = List(1, 2, 3)\n  println(values.map(_ * 2))\n}\n";
-
-    /// A Common Lisp script.
     const LISP: &str = "(defun factorial (n)\n  (if (<= n 1)\n      1\n      (* n (factorial (- n 1)))))\n\n(format t \"~a~%\" (factorial 5))\n";
 
     /// What `Message::Paste` does: the pane action applies the edit and
@@ -383,112 +347,42 @@ mod tests {
         "yaml",
     ];
 
-    /// A label kept out of the mapping on purpose.
-    struct Excluded {
-        /// The detector label (`Language::slug`).
-        label: &'static str,
-        /// The Meld language ID the label would use, when Meld has one.
-        id: Option<&'static str>,
-        /// Why the label is not mapped.
-        reason: &'static str,
-    }
-
-    /// Labels S11 leaves unmapped: either Meld knows the language but this
-    /// build has no syntax for it, or Meld has no language of its own for
-    /// the label. Mapping one of those would select a highlighting mode
-    /// that highlights nothing, and reusing another language's mode would
-    /// highlight a different grammar.
-    const EXCLUDED: &[Excluded] = &[
-        Excluded {
-            label: "asm",
-            id: None,
-            reason: "Meld has no assembly language",
-        },
-        Excluded {
-            label: "clojure",
-            id: None,
-            reason: "Meld's language table has no Clojure",
-        },
-        Excluded {
-            label: "cmake",
-            id: Some("cmake"),
-            reason: "no CMake syntax in this build",
-        },
-        Excluded {
-            label: "cobol",
-            id: None,
-            reason: "Meld has no COBOL language",
-        },
-        Excluded {
-            label: "dart",
-            id: Some("dart"),
-            reason: "no Dart syntax in this build",
-        },
-        Excluded {
-            label: "dockerfile",
-            id: Some("docker"),
-            reason: "no Dockerfile syntax in this build",
-        },
-        Excluded {
-            label: "elixir",
-            id: Some("elixir"),
-            reason: "no Elixir syntax in this build",
-        },
-        Excluded {
-            label: "gemfile",
-            id: None,
-            reason: "a Gemfile has no Meld language of its own",
-        },
-        Excluded {
-            label: "gemspec",
-            id: None,
-            reason: "a gemspec has no Meld language of its own",
-        },
-        Excluded {
-            label: "gradle",
-            id: None,
-            reason: "a Gradle build script is not Groovy source",
-        },
-        Excluded {
-            label: "ini",
-            id: Some("ini"),
-            reason: "no .ini syntax in this build",
-        },
-        Excluded {
-            label: "julia",
-            id: Some("julia"),
-            reason: "no Julia syntax in this build",
-        },
-        Excluded {
-            label: "kotlin",
-            id: Some("kotlin"),
-            reason: "no Kotlin syntax in this build",
-        },
-        Excluded {
-            label: "powershell",
-            id: Some("powershell"),
-            reason: "no PowerShell syntax in this build",
-        },
-        Excluded {
-            label: "swift",
-            id: Some("swift"),
-            reason: "no Swift syntax in this build",
-        },
-        Excluded {
-            label: "toml",
-            id: Some("toml"),
-            reason: "no TOML syntax in this build",
-        },
-        Excluded {
-            label: "vba",
-            id: Some("vbnet"),
-            reason: "VB.NET is a different dialect",
-        },
-        Excluded {
-            label: "verilog",
-            id: Some("verilog"),
-            reason: "no Verilog syntax in this build",
-        },
+    /// Labels S11 leaves unmapped, as `(label, Meld id, why)`: either Meld
+    /// knows the language but this build has no syntax for it, or Meld has no
+    /// language of its own for the label. Mapping one of those would select a
+    /// highlighting mode that highlights nothing, and reusing another
+    /// language's mode would highlight a different grammar.
+    const EXCLUDED: &[(&str, Option<&str>, &str)] = &[
+        ("asm", None, "Meld has no assembly language"),
+        ("clojure", None, "Meld's language table has no Clojure"),
+        ("cmake", Some("cmake"), "no CMake syntax in this build"),
+        ("cobol", None, "Meld has no COBOL language"),
+        ("dart", Some("dart"), "no Dart syntax in this build"),
+        (
+            "dockerfile",
+            Some("docker"),
+            "no Dockerfile syntax in this build",
+        ),
+        ("elixir", Some("elixir"), "no Elixir syntax in this build"),
+        ("gemfile", None, "a Gemfile has no Meld language of its own"),
+        ("gemspec", None, "a gemspec has no Meld language of its own"),
+        ("gradle", None, "a Gradle build script is not Groovy source"),
+        ("ini", Some("ini"), "no .ini syntax in this build"),
+        ("julia", Some("julia"), "no Julia syntax in this build"),
+        ("kotlin", Some("kotlin"), "no Kotlin syntax in this build"),
+        (
+            "powershell",
+            Some("powershell"),
+            "no PowerShell syntax in this build",
+        ),
+        ("swift", Some("swift"), "no Swift syntax in this build"),
+        ("toml", Some("toml"), "no TOML syntax in this build"),
+        ("vba", Some("vbnet"), "VB.NET is a different dialect"),
+        (
+            "verilog",
+            Some("verilog"),
+            "no Verilog syntax in this build",
+        ),
     ];
 
     #[test]
@@ -513,7 +407,7 @@ mod tests {
     fn every_betlang_label_is_mapped_or_excluded() {
         for label in BETLANG_LABELS {
             let mapped = meld_language(label).is_some();
-            let excluded = EXCLUDED.iter().any(|entry| entry.label == *label);
+            let excluded = EXCLUDED.iter().any(|(excluded, _, _)| excluded == label);
             assert!(
                 mapped != excluded,
                 "{label}: mapped={mapped} excluded={excluded}"
@@ -528,27 +422,17 @@ mod tests {
 
     #[test]
     fn excluded_labels_record_why_they_cannot_be_mapped() {
-        for entry in EXCLUDED {
-            assert!(
-                !entry.reason.is_empty(),
-                "{} is excluded without a reason",
-                entry.label
-            );
-            assert_eq!(
-                meld_language(entry.label),
-                None,
-                "{} is excluded but mapped",
-                entry.label
-            );
-            match entry.id {
+        for &(label, id, reason) in EXCLUDED {
+            assert!(!reason.is_empty(), "{label} is excluded without a reason");
+            assert_eq!(meld_language(label), None, "{label} is excluded but mapped");
+            match id {
                 // Meld knows the language: the exclusion is this build's
                 // missing syntax, and a future syntax set must flip this.
                 Some(id) => {
                     assert_eq!(
                         meld_files::languages::language(id).map(|language| language.id),
                         Some(id),
-                        "{} excludes {id}, which is not a Meld language",
-                        entry.label
+                        "{label} excludes {id}, which is not a Meld language"
                     );
                     assert!(
                         Highlighter::for_language(id).syntax_name().is_none(),
@@ -557,9 +441,8 @@ mod tests {
                 }
                 // Meld has no language of its own for the label.
                 None => assert!(
-                    meld_files::languages::language(entry.label).is_none(),
-                    "Meld gained a {} language; map the label in LANGUAGES",
-                    entry.label
+                    meld_files::languages::language(label).is_none(),
+                    "Meld gained a {label} language; map the label in LANGUAGES"
                 ),
             }
         }
@@ -899,97 +782,36 @@ mod tests {
         assert_eq!(language(&diff, 0), Some("python3"));
     }
 
-    // S11 smoke tests: each newly mapped language detects from a canonical
-    // short file through the same gate the editor uses.
+    // S11 smoke rows: the canonical file of each newly mapped language and
+    // the Meld id it detects through the same gate the editor uses. A row is
+    // `(what the file is, text, expected id)`, and the name is in every
+    // failure message so a broken language is named, not just counted.
+    const SMOKE: &[(&str, &str, &str)] = &[
+        ("a C program", C, "c"),
+        ("a C++ program", CPP, "cpp"),
+        ("a C# program", CS, "c-sharp"),
+        ("a CSS stylesheet", CSS, "css"),
+        ("a shell script", SHELL, "sh"),
+        ("a SQL script", SQL, "sql"),
+        ("a Ruby class", RUBY, "ruby"),
+        ("a PHP class", PHP, "php"),
+        ("a Perl script", PERL, "perl"),
+        ("a Lua script", LUA, "lua"),
+        ("a Haskell module", HASKELL, "haskell"),
+        ("an OCaml module", OCAML, "ocaml"),
+        ("an Objective-C class", OBJC, "objc"),
+        ("an Erlang module", ERLANG, "erlang"),
+        ("a Windows batch script", BATCH, "dosbatch"),
+        ("an R script", R, "r"),
+        ("a Scala program", SCALA, "scala"),
+        ("a Common Lisp script", LISP, "commonlisp"),
+    ];
 
     #[test]
-    fn a_c_program_is_detected() {
-        assert_eq!(detect(C), Detected::Language("c"));
-    }
-
-    #[test]
-    fn a_cpp_program_is_detected() {
-        assert_eq!(detect(CPP), Detected::Language("cpp"));
-    }
-
-    #[test]
-    fn a_csharp_program_is_detected() {
-        assert_eq!(detect(CS), Detected::Language("c-sharp"));
-    }
-
-    #[test]
-    fn a_css_stylesheet_is_detected() {
-        assert_eq!(detect(CSS), Detected::Language("css"));
-    }
-
-    #[test]
-    fn a_shell_script_is_detected() {
-        assert_eq!(detect(SHELL), Detected::Language("sh"));
-    }
-
-    #[test]
-    fn a_sql_script_is_detected() {
-        assert_eq!(detect(SQL), Detected::Language("sql"));
-    }
-
-    #[test]
-    fn a_ruby_class_is_detected() {
-        assert_eq!(detect(RUBY), Detected::Language("ruby"));
-    }
-
-    #[test]
-    fn a_php_class_is_detected() {
-        assert_eq!(detect(PHP), Detected::Language("php"));
-    }
-
-    #[test]
-    fn a_perl_script_is_detected() {
-        assert_eq!(detect(PERL), Detected::Language("perl"));
-    }
-
-    #[test]
-    fn a_lua_script_is_detected() {
-        assert_eq!(detect(LUA), Detected::Language("lua"));
-    }
-
-    #[test]
-    fn a_haskell_module_is_detected() {
-        assert_eq!(detect(HASKELL), Detected::Language("haskell"));
-    }
-
-    #[test]
-    fn an_ocaml_module_is_detected() {
-        assert_eq!(detect(OCAML), Detected::Language("ocaml"));
-    }
-
-    #[test]
-    fn an_objective_c_class_is_detected() {
-        assert_eq!(detect(OBJC), Detected::Language("objc"));
-    }
-
-    #[test]
-    fn an_erlang_module_is_detected() {
-        assert_eq!(detect(ERLANG), Detected::Language("erlang"));
-    }
-
-    #[test]
-    fn a_batch_script_is_detected() {
-        assert_eq!(detect(BATCH), Detected::Language("dosbatch"));
-    }
-
-    #[test]
-    fn an_r_script_is_detected() {
-        assert_eq!(detect(R), Detected::Language("r"));
-    }
-
-    #[test]
-    fn a_scala_program_is_detected() {
-        assert_eq!(detect(SCALA), Detected::Language("scala"));
-    }
-
-    #[test]
-    fn a_lisp_script_is_detected() {
-        assert_eq!(detect(LISP), Detected::Language("commonlisp"));
+    fn every_newly_mapped_language_is_detected_from_its_own_file() {
+        for &(name, text, id) in SMOKE {
+            assert_eq!(detect(text), Detected::Language(id), "smoke row {name}");
+        }
     }
 
     #[test]

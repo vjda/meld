@@ -346,29 +346,25 @@ impl Pane {
 
     /// Re-detects the language after the pane's text changed (S2).
     fn refresh_auto_language(&mut self) {
-        if !self.auto_detects() {
-            return;
+        if self.auto_detects() {
+            self.apply_detected(self.detected_language());
         }
-        let detected = self.detected_language();
-        self.apply_detected(detected);
     }
 
     /// Turns content detection back on and detects now (Auto-detect, S2).
     ///
-    /// Only unnamed panes have a language to detect; a file-backed pane
-    /// keeps the language of its file.
+    /// Only unnamed panes have a language to detect; a file-backed pane keeps
+    /// the language of its file.
     fn use_auto_detect(&mut self) {
-        if self.file.path.is_some() {
-            return;
+        if self.file.path.is_none() {
+            self.language_chosen = false;
+            // A language picked by hand is not evidence, so inconclusive text
+            // goes back to plain text (S4) instead of keeping it.
+            self.apply_detected(match self.detected_language() {
+                Detected::Unknown => Detected::Plain,
+                detected => detected,
+            });
         }
-        self.language_chosen = false;
-        let detected = self.detected_language();
-        // A language picked by hand is not evidence, so inconclusive text
-        // goes back to plain text (S4) instead of keeping it.
-        self.apply_detected(match detected {
-            Detected::Unknown => Detected::Plain,
-            detected => detected,
-        });
     }
 }
 
