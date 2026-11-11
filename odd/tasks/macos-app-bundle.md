@@ -48,8 +48,8 @@ standalone shell scripts under `scripts/`.
 | T2 | S1-S5, S7-S8 | `scripts/make-app.sh` (bundle + Info.plist + launcher) | (pending) |
 | T3 | S2, S4-S5 | `scripts/macos-install.sh` (build + install + symlink) | (pending) |
 | T4 | S1-S8 | README docs for macOS packaging | (pending) |
-| T5 | S1-S8 | GREEN tests + end-to-end install run | (pending) |
-| T6 | S1-S8 | Independent verification + native review (Risk: item 5, installer) | (pending) |
+| T5 | S1-S8 | GREEN tests + end-to-end install run (launcher self-exec bug found and fixed) | c5e6e6a6 |
+| T6 | S1-S8 | Independent verification (8/8 specs) + corrections + native review (Risk: item 5, installer) | 43d3f424 |
 
 ## Log
 
@@ -86,3 +86,11 @@ standalone shell scripts under `scripts/`.
   `check-added-large-files` rejects files over 500 KB (icon is 1146 KB). It remains an untracked
   local asset at `data/meld_rs.icns` that `scripts/make-app.sh` reads; use Git LFS or a hook
   change if it ever needs to be versioned.
+- **L6 (work-unit slices):** the feature ships in two work-unit commits — c5e6e6a6 (packaging
+  scripts, tests, docs: 558 lines) and 43d3f424 (verification corrections: 159 lines) — 693
+  authored lines in total, over the ~400-line guideline because scripts, tests and docs form a
+  single behavior unit; follow-up work goes in separate commits.
+- **L7 (icon versioned, user decision):** "A. Excepción acotada en el hook (recomendada)" —
+  `data/meld_rs.icns` is tracked with a hook-level `exclude: ^data/meld_rs\.icns$` on
+  `check-added-large-files` in `.pre-commit-config.yaml`; the large-file guard stays active for
+  every other path.

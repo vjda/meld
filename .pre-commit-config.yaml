@@ -9,6 +9,7 @@ repos:
     rev: v6.0.0
     hooks:
     -   id: check-added-large-files
+        exclude: ^data/meld_rs\.icns$
     -   id: check-xml
     -   id: check-yaml
     -   id: end-of-file-fixer
