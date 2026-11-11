@@ -272,7 +272,10 @@ pub fn shortcuts() -> Vec<ShortcutGroup> {
                 ("Return", trc!("shortcut window", "Compare selected")),
                 ("Alt+Left", trc!("shortcut window", "Copy to left")),
                 ("Alt+Right", trc!("shortcut window", "Copy to right")),
-                ("Delete", trc!("shortcut window", "Delete selected")),
+                (
+                    crate::ui::FOLDER_DELETE_SHORTCUT,
+                    trc!("shortcut window", "Delete selected"),
+                ),
             ],
         ),
         (
@@ -300,8 +303,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mac_shortcut_regression_preserves_global_shortcuts_and_return() {
+        let command = Modifiers::COMMAND;
+        for (key, expected) in [
+            ("s", Command::Save),
+            ("z", Command::Undo),
+            ("f", Command::Find),
+            ("i", Command::GoToLine),
+            ("n", Command::NewTab),
+            (",", Command::Preferences),
+        ] {
+            assert_eq!(
+                from_key(&Key::Character(key.into()), command),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            from_key(&Key::Named(Named::Enter), Modifiers::empty()),
+            Some(Command::Activate)
+        );
+        assert_eq!(from_key(&Key::Named(Named::Backspace), command), None);
+    }
+
+    #[test]
+    fn mac_shortcut_regression_folder_overlay_delete_is_contextual() {
+        let groups = shortcuts();
+        let folder = groups
+            .iter()
+            .find(|(heading, _)| *heading == trc!("shortcut window", "Folder comparison"))
+            .unwrap();
+        let file = groups
+            .iter()
+            .find(|(heading, _)| *heading == trc!("shortcut window", "File comparison"))
+            .unwrap();
+        let expected = if cfg!(target_os = "macos") {
+            "Cmd+Delete"
+        } else {
+            "Delete"
+        };
+        assert!(folder.1.iter().any(|(keys, _)| *keys == expected));
+        assert!(file.1.iter().any(|(keys, _)| *keys == "Alt+Delete"));
+    }
+
+    #[test]
     fn maps_meld_accelerators() {
-        let ctrl = Modifiers::CTRL;
+        let ctrl = Modifiers::COMMAND;
         assert_eq!(
             from_key(&Key::Character("s".into()), ctrl),
             Some(Command::Save)

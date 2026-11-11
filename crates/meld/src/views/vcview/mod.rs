@@ -2100,7 +2100,14 @@ fn clamp_tree_height(position: f32, available: f32) -> f32 {
 
 /// Maps unconsumed key presses over the tree to navigation.
 fn nav_key(key: &Key, modifiers: Modifiers) -> Option<Message> {
-    if modifiers.alt() || modifiers.logo() {
+    if ui::unsupported_tree_modifiers(modifiers) {
+        return None;
+    }
+    if cfg!(target_os = "macos")
+        && modifiers.command()
+        && !(modifiers == Modifiers::COMMAND
+            && matches!(key, Key::Character(c) if c.eq_ignore_ascii_case("a")))
+    {
         return None;
     }
     let extend = modifiers.shift();
@@ -2240,11 +2247,35 @@ mod tests {
         // Alt+Up is "previous change", handled by the window.
         assert_eq!(nav(Key::Named(Named::ArrowUp), Modifiers::ALT), None);
         assert_eq!(
-            nav(Key::Character("a".into()), Modifiers::CTRL),
+            nav(Key::Character("a".into()), Modifiers::COMMAND),
             Some((Nav::SelectAll, false))
         );
         assert_eq!(nav(Key::Character("a".into()), Modifiers::empty()), None);
-        assert_eq!(nav(Key::Named(Named::PageDown), Modifiers::CTRL), None);
+        assert_eq!(nav(Key::Named(Named::PageDown), Modifiers::COMMAND), None);
+    }
+
+    #[test]
+    fn mac_shortcut_regression_vc_select_all_and_rejected_modifiers() {
+        let a = Key::Character("a".into());
+        assert!(matches!(
+            nav_key(&a, Modifiers::COMMAND),
+            Some(Message::Nav(Nav::SelectAll, false))
+        ));
+        assert!(nav_key(&a, Modifiers::COMMAND | Modifiers::ALT).is_none());
+        if cfg!(target_os = "macos") {
+            for key in [
+                Named::ArrowDown,
+                Named::ArrowLeft,
+                Named::Home,
+                Named::End,
+                Named::Backspace,
+            ] {
+                assert!(nav_key(&Key::Named(key), Modifiers::COMMAND).is_none());
+            }
+            assert!(nav_key(&a, Modifiers::COMMAND | Modifiers::CTRL).is_none());
+        } else {
+            assert!(nav_key(&a, Modifiers::LOGO).is_none());
+        }
     }
 
     #[test]

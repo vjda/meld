@@ -49,7 +49,10 @@ $ cargo run --release -p meld -- --auto-merge local base remote -o merged
 ```
 
 `meld --help` lists all options. They match the Python version's, so Meld
-still works as a `git mergetool` or `git difftool`.
+still works as a `git mergetool` or `git difftool`. On macOS, shortcuts use
+Command (`cmd`) instead of Control (`ctrl`); in folder comparisons, `cmd+Delete`
+deletes the selected files while plain Delete (`Backspace`) navigates to the
+parent row.
 
 To install a desktop entry and icon for your user, build a release binary
 and run `crates/meld/data/install-desktop.sh`.

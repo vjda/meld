@@ -27,8 +27,8 @@
 //! to the link maps, gutters, chunk maps and [`crate::scroll_sync`] so
 //! everything stays aligned.
 //!
-//! Key presses the pane does not act on (Ctrl+S, Ctrl+Z, Alt+arrows,
-//! F-keys, Escape, ...) are left uncaptured so that
+//! Key presses the pane does not act on (Command/Ctrl+S, Command/Ctrl+Z,
+//! Alt+arrows, F-keys, Escape, ...) are left uncaptured so that
 //! `iced::keyboard::listen()` sees them.
 
 use std::cell::RefCell;
@@ -970,7 +970,12 @@ impl<'a, Message> TextPane<'a, Message> {
     ) {
         let ctrl = modifiers.command();
         let shift = modifiers.shift();
-        if modifiers.alt() || modifiers.logo() {
+        // Other Logo combinations previously fell through, including macOS
+        // Command navigation and shortcuts with additional modifiers.
+        let mac_edit_shortcut = modifiers.macos_command()
+            && modifiers == keyboard::Modifiers::COMMAND
+            && matches!(key.to_latin(physical_key), Some('a' | 'c' | 'x' | 'v'));
+        if modifiers.alt() || (modifiers.logo() && !mac_edit_shortcut) {
             return;
         }
         let editable = !self.buffer.is_read_only();
@@ -1911,6 +1916,553 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    struct TestClipboard {
+        standard: Option<String>,
+        primary: Option<String>,
+        reads: RefCell<Vec<clipboard::Kind>>,
+        writes: Vec<(clipboard::Kind, String)>,
+    }
+
+    impl Clipboard for TestClipboard {
+        fn read(&self, kind: clipboard::Kind) -> Option<String> {
+            self.reads.borrow_mut().push(kind);
+            match kind {
+                clipboard::Kind::Standard => self.standard.clone(),
+                clipboard::Kind::Primary => self.primary.clone(),
+            }
+        }
+
+        fn write(&mut self, kind: clipboard::Kind, contents: String) {
+            self.writes.push((kind, contents.clone()));
+            match kind {
+                clipboard::Kind::Standard => self.standard = Some(contents),
+                clipboard::Kind::Primary => self.primary = Some(contents),
+            }
+        }
+    }
+
+    fn renderer() -> iced::Renderer {
+        iced::futures::executor::block_on(<iced::Renderer as renderer::Headless>::new(
+            Font::MONOSPACE,
+            Pixels(14.0),
+            Some("tiny-skia"),
+        ))
+        .expect("the tiny-skia headless renderer is enabled")
+    }
+
+    fn letter(c: char, modifiers: keyboard::Modifiers, text: Option<&str>) -> Event {
+        let code = match c {
+            'a' => key::Code::KeyA,
+            'c' => key::Code::KeyC,
+            'f' => key::Code::KeyF,
+            'i' => key::Code::KeyI,
+            's' => key::Code::KeyS,
+            'v' => key::Code::KeyV,
+            'x' => key::Code::KeyX,
+            'z' => key::Code::KeyZ,
+            _ => panic!("unexpected test key {c}"),
+        };
+        let key = keyboard::Key::Character(c.to_string().into());
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: key::Physical::Code(code),
+            location: keyboard::Location::Standard,
+            modifiers,
+            text: text.map(Into::into),
+            repeat: false,
+        })
+    }
+
+    fn named(key: key::Named, modifiers: keyboard::Modifiers) -> Event {
+        let key = keyboard::Key::Named(key);
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: key::Physical::Unidentified(key::NativeCode::Unidentified),
+            location: keyboard::Location::Standard,
+            modifiers,
+            text: None,
+            repeat: false,
+        })
+    }
+
+    // Deliver events through the widget, then apply its published actions as
+    // the application does. Focus is obtained through an ordinary mouse click.
+    fn send(
+        buffer: &mut Buffer,
+        clipboard: &mut TestClipboard,
+        renderer: &iced::Renderer,
+        event: Event,
+        focused: bool,
+        interactive: bool,
+    ) -> (bool, Vec<Action>) {
+        let style = PaneStyle::default();
+        let mut pane = TextPane::new(buffer, &style);
+        if interactive {
+            pane = pane.on_action(|action| action);
+        }
+        let widget: &mut dyn Widget<Action, iced::Theme, iced::Renderer> = &mut pane;
+        let mut tree = Tree::new(&*widget);
+        let node = layout::Node::new(Size::new(400.0, 200.0));
+        let bounds = Rectangle::new(Point::new(0.0, 0.0), Size::new(400.0, 200.0));
+        let cursor = mouse::Cursor::Available(Point::new(60.0, 10.0));
+        let mut actions = Vec::new();
+        if focused {
+            let mut shell = Shell::new(&mut actions);
+            widget.update(
+                &mut tree,
+                &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                Layout::new(&node),
+                cursor,
+                renderer,
+                clipboard,
+                &mut shell,
+                &bounds,
+            );
+            actions.clear();
+        }
+        let mut shell = Shell::new(&mut actions);
+        widget.update(
+            &mut tree,
+            &event,
+            Layout::new(&node),
+            cursor,
+            renderer,
+            clipboard,
+            &mut shell,
+            &bounds,
+        );
+        let captured = shell.is_event_captured();
+        drop(pane);
+        for action in &actions {
+            buffer.perform(action.clone());
+        }
+        (captured, actions)
+    }
+
+    fn selected_buffer() -> Buffer {
+        let mut buffer = Buffer::from_text("alpha\nbeta");
+        buffer.select(Position::new(0, 1), Position::new(1, 2));
+        buffer
+    }
+
+    fn snapshot(buffer: &Buffer) -> (Vec<String>, Position, Option<Position>, u64, u64) {
+        (
+            buffer.lines().to_vec(),
+            buffer.cursor(),
+            buffer.anchor(),
+            buffer.revision(),
+            buffer.cursor_revision(),
+        )
+    }
+
+    fn clipboard() -> TestClipboard {
+        TestClipboard {
+            standard: Some("X\r\nY".into()),
+            primary: Some("primary".into()),
+            ..TestClipboard::default()
+        }
+    }
+
+    #[test]
+    fn command_select_all_through_key_pressed() {
+        let mut buffer = Buffer::from_text("alpha\nbeta");
+        let mut clipboard = clipboard();
+        let before_clipboard = clipboard.clone();
+        let (captured, actions) = send(
+            &mut buffer,
+            &mut clipboard,
+            &renderer(),
+            letter('a', keyboard::Modifiers::COMMAND, Some("a")),
+            true,
+            true,
+        );
+        assert!(captured);
+        assert_eq!(actions, vec![Action::SelectAll]);
+        assert_eq!(buffer.selected_text().as_deref(), Some("alpha\nbeta"));
+        assert_eq!((buffer.revision(), buffer.cursor_revision()), (0, 1));
+        assert_eq!(clipboard, before_clipboard);
+    }
+
+    #[test]
+    fn command_copy_through_key_pressed() {
+        let mut buffer = selected_buffer();
+        let before = snapshot(&buffer);
+        let mut clipboard = clipboard();
+        let (captured, actions) = send(
+            &mut buffer,
+            &mut clipboard,
+            &renderer(),
+            letter('c', keyboard::Modifiers::COMMAND, Some("c")),
+            true,
+            true,
+        );
+        assert!(captured);
+        assert!(actions.is_empty());
+        assert_eq!(snapshot(&buffer), before);
+        assert_eq!(clipboard.standard.as_deref(), Some("lpha\nbe"));
+        assert_eq!(clipboard.primary.as_deref(), Some("primary"));
+        assert!(clipboard.reads.borrow().is_empty());
+        assert_eq!(
+            clipboard.writes,
+            vec![(clipboard::Kind::Standard, "lpha\nbe".into())]
+        );
+    }
+
+    #[test]
+    fn command_cut_through_key_pressed() {
+        let mut buffer = selected_buffer();
+        let mut clipboard = clipboard();
+        let (captured, actions) = send(
+            &mut buffer,
+            &mut clipboard,
+            &renderer(),
+            letter('x', keyboard::Modifiers::COMMAND, Some("x")),
+            true,
+            true,
+        );
+        assert!(captured);
+        assert_eq!(actions, vec![Action::Edit(EditAction::Delete)]);
+        assert_eq!(buffer.lines(), &["ata"]);
+        assert_eq!(buffer.cursor(), Position::new(0, 1));
+        assert_eq!((buffer.revision(), buffer.cursor_revision()), (1, 2));
+        assert_eq!(clipboard.standard.as_deref(), Some("lpha\nbe"));
+        assert_eq!(clipboard.primary.as_deref(), Some("primary"));
+        assert!(clipboard.reads.borrow().is_empty());
+        assert_eq!(
+            clipboard.writes,
+            vec![(clipboard::Kind::Standard, "lpha\nbe".into())]
+        );
+    }
+
+    #[test]
+    fn command_paste_through_key_pressed() {
+        let mut buffer = selected_buffer();
+        let mut clipboard = clipboard();
+        let (captured, actions) = send(
+            &mut buffer,
+            &mut clipboard,
+            &renderer(),
+            letter('v', keyboard::Modifiers::COMMAND, Some("v")),
+            true,
+            true,
+        );
+        assert!(captured);
+        assert_eq!(
+            actions,
+            vec![Action::Edit(EditAction::Paste(Arc::new("X\r\nY".into())))]
+        );
+        assert_eq!(buffer.lines(), &["aX", "Yta"]);
+        assert_eq!(buffer.cursor(), Position::new(1, 1));
+        assert_eq!((buffer.revision(), buffer.cursor_revision()), (1, 2));
+        assert_eq!(*clipboard.reads.borrow(), vec![clipboard::Kind::Standard]);
+        assert!(clipboard.writes.is_empty());
+        assert_eq!(clipboard.standard.as_deref(), Some("X\r\nY"));
+        assert_eq!(clipboard.primary.as_deref(), Some("primary"));
+    }
+
+    #[test]
+    fn read_only_allows_select_and_copy_but_not_cut_or_paste() {
+        let renderer = renderer();
+        let mut buffer = Buffer::from_text("alpha\nbeta");
+        buffer.set_read_only(true);
+        let mut clipboard = clipboard();
+        let (captured, actions) = send(
+            &mut buffer,
+            &mut clipboard,
+            &renderer,
+            letter('a', keyboard::Modifiers::COMMAND, Some("a")),
+            true,
+            true,
+        );
+        assert!(captured);
+        assert_eq!(actions, vec![Action::SelectAll]);
+        assert_eq!(buffer.selected_text().as_deref(), Some("alpha\nbeta"));
+        let (captured, actions) = send(
+            &mut buffer,
+            &mut clipboard,
+            &renderer,
+            letter('c', keyboard::Modifiers::COMMAND, Some("c")),
+            true,
+            true,
+        );
+        assert!(captured);
+        assert!(actions.is_empty());
+        assert_eq!(clipboard.standard.as_deref(), Some("alpha\nbeta"));
+        assert_eq!(
+            clipboard.writes,
+            vec![(clipboard::Kind::Standard, "alpha\nbeta".into())]
+        );
+        let before = snapshot(&buffer);
+        let before_clipboard = clipboard.clone();
+        for c in ['x', 'v'] {
+            let (captured, actions) = send(
+                &mut buffer,
+                &mut clipboard,
+                &renderer,
+                letter(c, keyboard::Modifiers::COMMAND, Some(&c.to_string())),
+                true,
+                true,
+            );
+            assert!(!captured, "read-only {c}");
+            assert!(actions.is_empty());
+            assert_eq!(snapshot(&buffer), before);
+            assert_eq!(clipboard, before_clipboard);
+        }
+    }
+
+    #[test]
+    fn unsupported_modifiers_leave_events_and_state_untouched() {
+        let renderer = renderer();
+        let mut modifiers = vec![
+            keyboard::Modifiers::ALT,
+            keyboard::Modifiers::ALT | keyboard::Modifiers::COMMAND,
+        ];
+        if !cfg!(target_os = "macos") {
+            modifiers.extend([
+                keyboard::Modifiers::LOGO,
+                keyboard::Modifiers::LOGO | keyboard::Modifiers::CTRL,
+            ]);
+        }
+        for modifier in modifiers {
+            for c in ['a', 'c', 'x', 'v'] {
+                let mut buffer = selected_buffer();
+                let before = snapshot(&buffer);
+                let mut clipboard = clipboard();
+                let before_clipboard = clipboard.clone();
+                let (captured, actions) = send(
+                    &mut buffer,
+                    &mut clipboard,
+                    &renderer,
+                    letter(c, modifier, Some(&c.to_string())),
+                    true,
+                    true,
+                );
+                assert!(!captured, "{modifier:?}+{c}");
+                assert!(actions.is_empty());
+                assert_eq!(snapshot(&buffer), before);
+                assert_eq!(clipboard, before_clipboard);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_command_named_keys_keep_previous_fallthrough() {
+        let renderer = renderer();
+        for key in [
+            key::Named::Backspace,
+            key::Named::Delete,
+            key::Named::ArrowLeft,
+            key::Named::ArrowRight,
+            key::Named::ArrowUp,
+            key::Named::ArrowDown,
+            key::Named::Home,
+            key::Named::End,
+            key::Named::Insert,
+            key::Named::PageUp,
+            key::Named::PageDown,
+        ] {
+            for modifiers in [
+                keyboard::Modifiers::COMMAND,
+                keyboard::Modifiers::COMMAND | keyboard::Modifiers::SHIFT,
+            ] {
+                let mut buffer = selected_buffer();
+                let before = snapshot(&buffer);
+                let mut clipboard = clipboard();
+                let before_clipboard = clipboard.clone();
+                let (captured, actions) = send(
+                    &mut buffer,
+                    &mut clipboard,
+                    &renderer,
+                    named(key, modifiers),
+                    true,
+                    true,
+                );
+                assert!(!captured, "{modifiers:?}+{key:?}");
+                assert!(actions.is_empty(), "{modifiers:?}+{key:?}: {actions:?}");
+                assert_eq!(snapshot(&buffer), before, "{modifiers:?}+{key:?}");
+                assert_eq!(clipboard, before_clipboard, "{modifiers:?}+{key:?}");
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn assert_mac_command_letters_with_extra_modifier_are_ignored(extra: keyboard::Modifiers) {
+        let renderer = renderer();
+        for c in ['c', 'x', 'a', 'v'] {
+            let mut buffer = selected_buffer();
+            let before = snapshot(&buffer);
+            let mut clipboard = clipboard();
+            let before_clipboard = clipboard.clone();
+            let (captured, actions) = send(
+                &mut buffer,
+                &mut clipboard,
+                &renderer,
+                letter(
+                    c,
+                    keyboard::Modifiers::COMMAND | extra,
+                    Some(&c.to_string()),
+                ),
+                true,
+                true,
+            );
+            assert!(!captured, "Command+{extra:?}+{c}");
+            assert!(actions.is_empty());
+            assert_eq!(snapshot(&buffer), before);
+            assert_eq!(clipboard, before_clipboard);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_command_shift_letters_keep_previous_fallthrough() {
+        assert_mac_command_letters_with_extra_modifier_are_ignored(keyboard::Modifiers::SHIFT);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_command_control_letters_keep_previous_fallthrough() {
+        assert_mac_command_letters_with_extra_modifier_are_ignored(keyboard::Modifiers::CTRL);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn control_is_not_a_command_alias_on_mac() {
+        let renderer = renderer();
+        for (c, text) in [
+            ('a', "\u{1}"),
+            ('c', "\u{3}"),
+            ('x', "\u{18}"),
+            ('v', "\u{16}"),
+        ] {
+            let mut buffer = selected_buffer();
+            let before = snapshot(&buffer);
+            let mut clipboard = clipboard();
+            let before_clipboard = clipboard.clone();
+            let (captured, actions) = send(
+                &mut buffer,
+                &mut clipboard,
+                &renderer,
+                letter(c, keyboard::Modifiers::CTRL, Some(text)),
+                true,
+                true,
+            );
+            assert!(!captured, "Ctrl+{c}");
+            assert!(actions.is_empty());
+            assert_eq!(snapshot(&buffer), before);
+            assert_eq!(clipboard, before_clipboard);
+        }
+    }
+
+    #[test]
+    fn shortcuts_require_focus_and_an_action_handler() {
+        let renderer = renderer();
+        for (focused, interactive) in [(false, true), (true, false)] {
+            for c in ['a', 'c', 'x', 'v'] {
+                let mut buffer = selected_buffer();
+                let before = snapshot(&buffer);
+                let mut clipboard = clipboard();
+                let before_clipboard = clipboard.clone();
+                let (captured, actions) = send(
+                    &mut buffer,
+                    &mut clipboard,
+                    &renderer,
+                    letter(c, keyboard::Modifiers::COMMAND, Some(&c.to_string())),
+                    focused,
+                    interactive,
+                );
+                assert!(
+                    !captured,
+                    "focused={focused}, interactive={interactive}, {c}"
+                );
+                assert!(actions.is_empty());
+                assert_eq!(snapshot(&buffer), before);
+                assert_eq!(clipboard, before_clipboard);
+            }
+        }
+    }
+
+    #[test]
+    fn application_shortcuts_fall_through_the_editor() {
+        let renderer = renderer();
+        for c in ['s', 'z', 'f', 'i'] {
+            let mut buffer = selected_buffer();
+            let before = snapshot(&buffer);
+            let mut clipboard = clipboard();
+            let before_clipboard = clipboard.clone();
+            let (captured, actions) = send(
+                &mut buffer,
+                &mut clipboard,
+                &renderer,
+                letter(c, keyboard::Modifiers::COMMAND, Some(&c.to_string())),
+                true,
+                true,
+            );
+            assert!(!captured, "Command+{c}");
+            assert!(actions.is_empty());
+            assert_eq!(snapshot(&buffer), before);
+            assert_eq!(clipboard, before_clipboard);
+        }
+    }
+
+    #[test]
+    fn previous_text_navigation_and_shift_clipboard_shortcuts_still_work() {
+        let renderer = renderer();
+        let mut buffer = selected_buffer();
+        let mut clipboard = clipboard();
+        let (captured, actions) = send(
+            &mut buffer,
+            &mut clipboard,
+            &renderer,
+            named(key::Named::Delete, keyboard::Modifiers::SHIFT),
+            true,
+            true,
+        );
+        assert!(captured);
+        assert_eq!(actions, vec![Action::Edit(EditAction::Delete)]);
+        assert_eq!(buffer.lines(), &["ata"]);
+        assert_eq!(clipboard.standard.as_deref(), Some("lpha\nbe"));
+        let (captured, actions) = send(
+            &mut buffer,
+            &mut clipboard,
+            &renderer,
+            named(key::Named::Insert, keyboard::Modifiers::SHIFT),
+            true,
+            true,
+        );
+        assert!(captured);
+        assert_eq!(
+            actions,
+            vec![Action::Edit(EditAction::Paste(Arc::new("lpha\nbe".into())))]
+        );
+        assert_eq!(buffer.lines(), &["alpha", "beta"]);
+        let (captured, actions) = send(
+            &mut buffer,
+            &mut clipboard,
+            &renderer,
+            named(key::Named::Home, keyboard::Modifiers::empty()),
+            true,
+            true,
+        );
+        assert!(captured);
+        assert_eq!(actions, vec![Action::Move(Motion::Home)]);
+        assert_eq!(buffer.cursor(), Position::new(1, 0));
+        let (captured, actions) = send(
+            &mut buffer,
+            &mut clipboard,
+            &renderer,
+            letter('a', keyboard::Modifiers::empty(), Some("a")),
+            true,
+            true,
+        );
+        assert!(captured);
+        assert_eq!(actions, vec![Action::Edit(EditAction::Insert('a'))]);
+        assert_eq!(buffer.lines(), &["alpha", "abeta"]);
+    }
 
     #[test]
     fn visible_line_math() {

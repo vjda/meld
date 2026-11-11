@@ -17,7 +17,7 @@ pub fn shortcuts<'a, M: Clone + 'a>(on_close: M) -> Element<'a, M> {
             list = list.push(
                 row![
                     text(action).size(14).width(Length::Fill),
-                    text(keys).size(13).style(ui::dim_text)
+                    text(ui::shortcut_label(keys)).size(13).style(ui::dim_text)
                 ]
                 .spacing(16),
             );

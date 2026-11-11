@@ -130,7 +130,13 @@ pub fn start_key(key: &Key, modifiers: Modifiers) -> Option<String> {
 /// Keys the open search entry handles itself, before the text field
 /// sees them.
 pub fn entry_key(key: &Key, modifiers: Modifiers) -> Option<EntryKey> {
-    if modifiers.alt() || modifiers.logo() {
+    if super::unsupported_tree_modifiers(modifiers) {
+        return None;
+    }
+    if cfg!(target_os = "macos")
+        && modifiers.command()
+        && !matches!(key, Key::Character(c) if c.eq_ignore_ascii_case("g"))
+    {
         return None;
     }
     match key {
@@ -253,6 +259,34 @@ mod tests {
             Some(EntryKey::Activate)
         );
         assert_eq!(entry_key(&Key::Character("x".into()), none), None);
+    }
+
+    #[test]
+    fn mac_shortcut_regression_search_steps_with_command() {
+        let g = Key::Character("g".into());
+        assert_eq!(
+            entry_key(&g, Modifiers::COMMAND),
+            Some(EntryKey::Step(Step::Next))
+        );
+        assert_eq!(
+            entry_key(&g, Modifiers::COMMAND | Modifiers::SHIFT),
+            Some(EntryKey::Step(Step::Previous))
+        );
+        assert_eq!(entry_key(&g, Modifiers::COMMAND | Modifiers::ALT), None);
+        assert_eq!(start_key(&g, Modifiers::COMMAND), None);
+        if cfg!(target_os = "macos") {
+            for key in [
+                Named::ArrowDown,
+                Named::ArrowUp,
+                Named::Escape,
+                Named::Enter,
+            ] {
+                assert_eq!(entry_key(&Key::Named(key), Modifiers::COMMAND), None);
+            }
+            assert_eq!(entry_key(&g, Modifiers::COMMAND | Modifiers::CTRL), None);
+        } else {
+            assert_eq!(entry_key(&g, Modifiers::LOGO), None);
+        }
     }
 
     #[test]

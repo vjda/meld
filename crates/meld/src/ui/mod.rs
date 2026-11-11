@@ -80,9 +80,67 @@ pub fn tool_button<'a, M: Clone + 'a>(
     .into()
 }
 
-/// A tooltip followed by its shortcut: `Refresh (Ctrl+R)`.
+/// Folder deletion differs from the plain Delete shortcut in other views.
+pub const FOLDER_DELETE_SHORTCUT: &str = if cfg!(target_os = "macos") {
+    "Cmd+Delete"
+} else {
+    "Delete"
+};
+
+/// Formats static shortcut labels without changing their stored representation.
+pub fn shortcut_label(shortcut: &str) -> String {
+    shortcut_label_for(shortcut, cfg!(target_os = "macos"))
+}
+
+fn shortcut_label_for(shortcut: &str, macos: bool) -> String {
+    if macos {
+        shortcut.replace("Ctrl+", "Cmd+")
+    } else {
+        shortcut.to_owned()
+    }
+}
+
+/// Reject modifiers the tree and search shortcuts do not support.
+pub fn unsupported_tree_modifiers(modifiers: iced::keyboard::Modifiers) -> bool {
+    modifiers.alt()
+        || (modifiers.logo() && !modifiers.command())
+        || (cfg!(target_os = "macos") && modifiers.command() && modifiers.control())
+}
+
+/// A tooltip followed by its platform-specific shortcut.
 pub fn with_shortcut(tip: &str, shortcut: &str) -> String {
-    format!("{tip} ({shortcut})")
+    format!("{tip} ({})", shortcut_label(shortcut))
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+
+    #[test]
+    fn mac_shortcut_regression_tooltip_uses_platform_modifier() {
+        let expected = if cfg!(target_os = "macos") {
+            "Refresh (Cmd+R, Cmd+Shift+F)"
+        } else {
+            "Refresh (Ctrl+R, Ctrl+Shift+F)"
+        };
+        assert_eq!(with_shortcut("Refresh", "Ctrl+R, Ctrl+Shift+F"), expected);
+        assert_eq!(
+            shortcut_label_for("Ctrl++ / Ctrl+Shift+F", true),
+            "Cmd++ / Cmd+Shift+F"
+        );
+        assert_eq!(
+            shortcut_label_for("Ctrl++ / Ctrl+Shift+F", false),
+            "Ctrl++ / Ctrl+Shift+F"
+        );
+        assert_eq!(
+            with_shortcut("Delete change", "Alt+Delete"),
+            "Delete change (Alt+Delete)"
+        );
+        assert_eq!(
+            with_shortcut("Other delete", "Delete"),
+            "Other delete (Delete)"
+        );
+    }
 }
 
 /// A flat text button.
