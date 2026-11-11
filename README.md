@@ -61,6 +61,34 @@ Settings are stored in `$XDG_CONFIG_HOME/meld/settings.toml` and recent
 comparisons in `$XDG_DATA_HOME/meld/recent.toml`.
 
 
+macOS application bundle
+------------------------
+
+`scripts/macos-install.sh` builds Meld and installs it as `Meld_rs.app` in
+`/Applications`, with `meld-rs` exposed on your PATH through a symlink in
+`~/bin` (it replaces a manually copied `~/bin/meld-rs`):
+
+```sh
+$ scripts/macos-install.sh
+```
+
+The app icon comes from `data/meld_rs.icns`, the display name is "Meld RS",
+and the bundle is registered for files and folders, so Finder's
+"Open With Meld_rs" opens comparisons (the CLI accepts up to three paths).
+Opening documents while the app is already running is not supported yet.
+
+The `Contents/MacOS/Meld_rs` launcher resolves PATH from your `~/.bashrc`
+before starting Meld, so run-time tools (`git`, `gh`, `glab`, `claude`) are
+found when the app is launched from Finder, which otherwise inherits only
+launchd's minimal PATH. Terminal launches through `meld-rs` behave the same.
+
+`scripts/make-app.sh --binary target/release/meld` assembles the bundle
+without installing it; both scripts document their options with `--help`.
+The bundle is unsigned and meant for local use: on other Macs Gatekeeper
+blocks it unless it is signed and notarized. `scripts/test-macos-bundle.sh`
+checks the packaging scripts in an isolated temp directory.
+
+
 Developing
 ----------
 
