@@ -94,3 +94,10 @@ standalone shell scripts under `scripts/`.
   `data/meld_rs.icns` is tracked with a hook-level `exclude: ^data/meld_rs\.icns$` on
   `check-added-large-files` in `.pre-commit-config.yaml`; the large-file guard stays active for
   every other path.
+- **L8 (close-out):** end-to-end accepted by the user (launcher, CLI, and gh/glab invocation from
+  the UI all work). Native review for candidate sha256:b4d9affd… (7 paths, 702 lines) recorded a
+  candidate-scoped consent decline at START: no lineage was created and no authority was burned;
+  a decline is not the kill switch. Final commits: c5e6e6a6 (packaging), 43d3f424 (verification
+  corrections), d95acf58 (icon + scoped hook exclusion). Known gaps: the validate-before-build
+  ordering is proven only by a manual probe (no committed test); a multi-hop symlink chain test
+  (T-CHAIN) remains an optional improvement.
