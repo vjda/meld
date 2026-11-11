@@ -18,17 +18,29 @@ VERSION=""
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; }
 
+# need_value <flag> [args...]: fail with a usage error instead of dying on
+# "unbound variable" when a value-taking flag is the last argument.
+need_value() {
+	if [ $# -lt 2 ]; then
+		echo "make-app.sh: $1 requires a value" >&2
+		exit 2
+	fi
+}
+
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--binary)
+		need_value "$@"
 		BINARY="$2"
 		shift 2
 		;;
 	--out)
+		need_value "$@"
 		OUT="$2"
 		shift 2
 		;;
 	--version)
+		need_value "$@"
 		VERSION="$2"
 		shift 2
 		;;

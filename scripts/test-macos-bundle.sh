@@ -183,6 +183,96 @@ PATH="$FAKEBIN:$PATH" bash "$INSTALL" --no-build --binary "$STUB" \
 check "install is idempotent (second run)" test -L "$BINDIR/meld-rs"
 check "--no-build never calls cargo (2nd)" test ! -e "$WORK/cargo-called.txt"
 
+# ---------------------------------------------------------------------------
+# Regression: the installer must refuse unsafe destinations and must never
+# report a false CLI success.
+# ---------------------------------------------------------------------------
+
+# T-DIR: "$BIN_DIR/meld-rs" is a directory (neither a file nor a symlink) —
+# refuse instead of linking inside it and claiming success.
+DIRBIN="$WORK/dirbin"
+mkdir -p "$DIRBIN/meld-rs"
+T_DIR_OUT="$(PATH="$FAKEBIN:$PATH" bash "$INSTALL" --no-build --binary "$STUB" \
+	--app-dir "$WORK/Applications-dir" --bin-dir "$DIRBIN" 2>&1)"
+T_DIR_STATUS=$?
+if [ "$T_DIR_STATUS" -ne 0 ]; then
+	ok "install fails when bin-dir/meld-rs is a directory (T-DIR)"
+else
+	bad "install fails when bin-dir/meld-rs is a directory (T-DIR)"
+fi
+if printf '%s\n' "$T_DIR_OUT" | grep -q '^CLI:'; then
+	bad "no CLI: success line when bin-dir/meld-rs is a directory (T-DIR)"
+else
+	ok "no CLI: success line when bin-dir/meld-rs is a directory (T-DIR)"
+fi
+check "directory bin-dir/meld-rs is preserved (T-DIR)" test -d "$DIRBIN/meld-rs"
+if [ -z "$(ls -A "$DIRBIN/meld-rs" 2>/dev/null)" ]; then
+	ok "nothing is created inside the directory bin-dir/meld-rs (T-DIR)"
+else
+	bad "nothing is created inside the directory bin-dir/meld-rs (T-DIR)"
+fi
+
+# T-REPL: a regular file (the old manual copy) is replaced by the symlink while
+# sibling files in the same bin dir stay byte-identical.
+REPLBIN="$WORK/replbin"
+mkdir -p "$REPLBIN"
+printf 'old manual copy\n' >"$REPLBIN/meld-rs"
+printf 'sibling tool\n' >"$REPLBIN/other-tool"
+cp "$REPLBIN/other-tool" "$WORK/other-tool.expected"
+PATH="$FAKEBIN:$PATH" bash "$INSTALL" --no-build --binary "$STUB" \
+	--app-dir "$WORK/Applications-repl" --bin-dir "$REPLBIN" >/dev/null 2>&1
+check "install replaces a regular bin-dir/meld-rs with a symlink (T-REPL)" test -L "$REPLBIN/meld-rs"
+check "install leaves sibling bin-dir files untouched (T-REPL)" cmp -s "$WORK/other-tool.expected" "$REPLBIN/other-tool"
+
+# T-NOBUILD: --binary implies --no-build, so cargo never runs.
+rm -f "$WORK/cargo-called.txt"
+PATH="$FAKEBIN:$PATH" bash "$INSTALL" --binary "$STUB" \
+	--app-dir "$WORK/Applications-nobuild" --bin-dir "$WORK/bin-nobuild" >/dev/null 2>&1
+check "--binary alone never calls cargo (T-NOBUILD)" test ! -e "$WORK/cargo-called.txt"
+
+# T-ERR-S5a: --app-dir under a read-only parent that does not exist yet.
+RO="$WORK/ro2"
+mkdir -p "$RO"
+chmod 555 "$RO"
+T_RO_OUT="$(PATH="$FAKEBIN:$PATH" bash "$INSTALL" --no-build --binary "$STUB" \
+	--app-dir "$RO/new" --bin-dir "$WORK/bin-ro2" 2>&1)"
+T_RO_STATUS=$?
+chmod 755 "$RO"
+eq "uncreatable app-dir exits 1 (T-ERR-S5a)" "1" "$T_RO_STATUS"
+case "$T_RO_OUT" in
+*"cannot create"*) ok "uncreatable app-dir reports 'cannot create' (T-ERR-S5a)" ;;
+*) bad "uncreatable app-dir reports 'cannot create' (T-ERR-S5a)" ;;
+esac
+check "no bundle created under an uncreatable app-dir (T-ERR-S5a)" test ! -e "$RO/new/Meld_rs.app"
+check "no CLI symlink when app-dir cannot be created (T-ERR-S5a)" test ! -e "$WORK/bin-ro2/meld-rs"
+
+# T-ERR-S5b: existing read-only app dir — fail with guidance, never sudo.
+SUDOBIN="$WORK/sudobin"
+mkdir -p "$SUDOBIN"
+cat >"$SUDOBIN/sudo" <<EOF
+#!/usr/bin/env bash
+echo "sudo must not be required" >>"$WORK/sudo-called.txt"
+exit 0
+EOF
+chmod +x "$SUDOBIN/sudo"
+RO3="$WORK/ro3"
+mkdir -p "$RO3"
+chmod 555 "$RO3"
+T_RO3_OUT="$(PATH="$SUDOBIN:$FAKEBIN:$PATH" bash "$INSTALL" --no-build --binary "$STUB" \
+	--app-dir "$RO3" --bin-dir "$WORK/bin-ro3" 2>&1)"
+T_RO3_STATUS=$?
+chmod 755 "$RO3"
+eq "unwritable app-dir exits 1 (T-ERR-S5b)" "1" "$T_RO3_STATUS"
+case "$T_RO3_OUT" in
+*"not writable"*) ok "unwritable app-dir reports 'not writable' (T-ERR-S5b)" ;;
+*) bad "unwritable app-dir reports 'not writable' (T-ERR-S5b)" ;;
+esac
+case "$T_RO3_OUT" in
+*"--app-dir"*) ok "unwritable app-dir hints at --app-dir (T-ERR-S5b)" ;;
+*) bad "unwritable app-dir hints at --app-dir (T-ERR-S5b)" ;;
+esac
+check "installer never invokes sudo (T-ERR-S5b)" test ! -e "$WORK/sudo-called.txt"
+
 echo
 echo "$TESTS checks run, failures: $FAIL"
 exit "$FAIL"
