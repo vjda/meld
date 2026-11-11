@@ -464,6 +464,19 @@ impl FileDiff {
                 let current = self.panes[*pane].language;
                 let needle = filter.to_lowercase();
                 let mut list = column![];
+                // Only an unnamed pane detects its language from the text,
+                // so it is the only one that can go back to detection (S2).
+                if self.panes[*pane].file.path.is_none()
+                    && tr!("Auto-detect").to_lowercase().contains(&needle)
+                {
+                    list = list.push(
+                        button(text(tr!("Auto-detect")).size(14))
+                            .width(Length::Fill)
+                            .padding([4, 10])
+                            .style(ui::tab_button(!self.panes[*pane].language_chosen))
+                            .on_press(dialog_message(DialogMessage::AutoDetectLanguage)),
+                    );
+                }
                 if tr!("Plain Text").to_lowercase().contains(&needle) {
                     list = list.push(
                         button(text(tr!("Plain Text")).size(14))

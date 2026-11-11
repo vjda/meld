@@ -17,6 +17,19 @@ This is a rewrite of Meld in Rust with an [iced](https://iced.rs) user
 interface. The original Python and GTK version lives on upstream; its last
 state in this repository is commit 29d59e07.
 
+A pane with no file behind it highlights what its text looks like: YAML,
+JSON, Markdown, XML, HTML, Groovy, Python, JavaScript, TypeScript, Java,
+Go or Rust. A confident detection switches the highlighting; inconclusive
+text keeps the language the pane already shows, so an unfinished document
+does not flicker between guesses, and for ordinary editing the
+highlighting stops only when the pane becomes empty (whitespace-only
+counts as empty). Choosing **Auto-detect** re-checks the current text
+from scratch: without a conclusive shape it falls back to plain text.
+Picking a language in the Highlighting Mode menu
+— Plain Text included — turns detection off for that pane until
+**Auto-detect** is chosen there again; panes opened from a file keep the
+language of the file.
+
 Meld is licensed under the GPL v2 or later.
 
 
@@ -129,3 +142,13 @@ Links
 Home page:      https://meld.app/
 
 Documentation:  https://meld.app/help/
+
+
+Credits
+-------
+
+Meld is licensed under the GPL v2 or later.
+
+Detecting the language of unnamed panes uses [`betlang`](https://crates.io/crates/betlang)
+(MIT), which embeds a distilled model trained from
+[Magika](https://github.com/google/magika) (Apache-2.0).
