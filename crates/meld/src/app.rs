@@ -221,6 +221,13 @@ impl Meld {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Tab(id, message) => {
+                // Modal layers can leave an ignored key visible to the folder tree.
+                if modal_blocks_folder_delete(
+                    self.dialog.is_some() || self.chooser.is_some(),
+                    &message,
+                ) {
+                    return Task::none();
+                }
                 let mut events = Vec::new();
                 let Some(entry) = self.tabs.iter_mut().find(|t| t.id == id) else {
                     return Task::none();
@@ -687,7 +694,7 @@ impl Meld {
         }
         tabs = tabs.push(ui::tool_button(
             icon::ADD,
-            tr!("New comparison (Ctrl+N)"),
+            ui::shortcut_label(tr!("New comparison (Ctrl+N)")),
             Some(Message::NewTab),
         ));
 
@@ -826,6 +833,14 @@ impl Meld {
     }
 }
 
+fn modal_blocks_folder_delete(modal_open: bool, message: &views::Message) -> bool {
+    modal_open
+        && matches!(
+            message,
+            views::Message::Folder(views::dirdiff::Message::Delete)
+        )
+}
+
 /// Wayland app id; matches `crates/meld/data/org.gnome.Meld.Rust.desktop`,
 /// which is how compositors find the icon. Kept apart from the Python
 /// build's `org.gnome.Meld` so the two installs don't shadow each other.
@@ -859,6 +874,16 @@ fn window_icon() -> Option<window::Icon> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mac_shortcut_regression_modal_blocks_only_folder_deletion() {
+        use crate::views::{self, dirdiff};
+        let delete = views::Message::Folder(dirdiff::Message::Delete);
+        let compare = views::Message::Folder(dirdiff::Message::Compare);
+        assert!(!super::modal_blocks_folder_delete(false, &delete));
+        assert!(super::modal_blocks_folder_delete(true, &delete));
+        assert!(!super::modal_blocks_folder_delete(true, &compare));
+    }
+
     #[test]
     fn window_icon_renders() {
         assert!(super::window_icon().is_some());

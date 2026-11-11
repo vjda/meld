@@ -1161,7 +1161,7 @@ impl DirDiff {
     }
 
     fn queue_delete(&mut self) -> Task<Message> {
-        if !self.selection_valid() {
+        if self.search.is_some() || self.dialog.is_some() || !self.selection_valid() {
             return Task::none();
         }
         let pane = self.sel.pane;
@@ -1836,7 +1836,7 @@ impl DirDiff {
         r = r.push(tool_button(
             "✖",
             tr!("Delete selected"),
-            "Delete",
+            ui::FOLDER_DELETE_SHORTCUT,
             valid.then_some(Message::Delete),
         ));
         r = r.push(tool_button(
@@ -1918,7 +1918,7 @@ impl DirDiff {
             ),
             item(
                 tr!("Delete Selected"),
-                Some("Delete"),
+                Some(ui::FOLDER_DELETE_SHORTCUT),
                 valid.then_some(Message::Delete),
             ),
             menu::Item::Separator,
@@ -2449,17 +2449,10 @@ impl DirDiff {
             .height(Length::Fill);
 
         let searching = self.search.is_some();
+        let dialog_open = self.dialog.is_some();
         keys::KeyListener::new(
             search::overlay(scroller, self.search.as_ref(), Message::SearchInput),
-            move |key, modifiers| {
-                on_key(key, modifiers).or_else(|| {
-                    if searching {
-                        None
-                    } else {
-                        search::start_key(key, modifiers).map(Message::SearchStart)
-                    }
-                })
-            },
+            move |key, modifiers| tree_key(key, modifiers, searching, dialog_open),
         )
         .intercept(move |key, modifiers| {
             if searching {
@@ -2650,10 +2643,38 @@ impl DirDiff {
     }
 }
 
+/// Routes unconsumed tree keys, leaving deletion to focused inputs and dialogs.
+fn tree_key(
+    key: &Key,
+    modifiers: Modifiers,
+    searching: bool,
+    dialog_open: bool,
+) -> Option<Message> {
+    on_key(key, modifiers)
+        .filter(|message| !(searching || dialog_open) || !matches!(message, Message::Delete))
+        .or_else(|| {
+            if searching {
+                None
+            } else {
+                search::start_key(key, modifiers).map(Message::SearchStart)
+            }
+        })
+}
+
 /// Keys handled by the trees themselves, when no other widget took them.
 fn on_key(key: &Key, modifiers: Modifiers) -> Option<Message> {
-    if modifiers.alt() || modifiers.logo() {
+    if ui::unsupported_tree_modifiers(modifiers) {
         return None;
+    }
+    if cfg!(target_os = "macos") && modifiers.command() {
+        match key {
+            Key::Named(Named::Backspace) if modifiers == Modifiers::COMMAND => {
+                return Some(Message::Delete);
+            }
+            Key::Character(c) if modifiers == Modifiers::COMMAND && c.eq_ignore_ascii_case("a") => {
+            }
+            _ => return None,
+        }
     }
     let shift = modifiers.shift();
     let ctrl = modifiers.command();
@@ -2668,7 +2689,7 @@ fn on_key(key: &Key, modifiers: Modifiers) -> Option<Message> {
         Key::Named(Named::ArrowRight) if !ctrl && !shift => Nav::PaneRight,
         Key::Named(Named::ArrowLeft) if shift => Nav::Collapse,
         Key::Named(Named::ArrowRight) if shift => Nav::Expand,
-        Key::Named(Named::Backspace) => Nav::Parent,
+        Key::Named(Named::Backspace) if !cfg!(target_os = "macos") || !ctrl => Nav::Parent,
         Key::Character(c) if !ctrl => match c.as_str() {
             "+" | "=" => Nav::Expand,
             "-" => Nav::Collapse,
@@ -2793,9 +2814,251 @@ mod tests {
         assert!(on_key(&Key::Named(Named::ArrowDown), Modifiers::ALT).is_none());
         assert!(on_key(&Key::Named(Named::Enter), none).is_none());
         assert!(matches!(
-            on_key(&Key::Character("a".into()), Modifiers::CTRL),
+            on_key(&Key::Character("a".into()), Modifiers::COMMAND),
             Some(Message::Nav(Nav::SelectAll, false))
         ));
+    }
+
+    #[test]
+    fn mac_shortcut_regression_folder_keys_are_contextual_and_exact() {
+        let backspace = Key::Named(Named::Backspace);
+        assert!(matches!(
+            on_key(&backspace, Modifiers::empty()),
+            Some(Message::Nav(Nav::Parent, false))
+        ));
+        assert!(matches!(
+            on_key(&Key::Character("a".into()), Modifiers::COMMAND),
+            Some(Message::Nav(Nav::SelectAll, false))
+        ));
+        if cfg!(target_os = "macos") {
+            for key in [Named::ArrowDown, Named::Home, Named::End] {
+                assert!(on_key(&Key::Named(key), Modifiers::COMMAND).is_none());
+            }
+            assert!(
+                on_key(
+                    &Key::Named(Named::ArrowLeft),
+                    Modifiers::COMMAND | Modifiers::SHIFT
+                )
+                .is_none()
+            );
+            assert!(matches!(
+                on_key(&backspace, Modifiers::COMMAND),
+                Some(Message::Delete)
+            ));
+            for extra in [Modifiers::SHIFT, Modifiers::ALT, Modifiers::CTRL] {
+                assert!(!matches!(
+                    on_key(&backspace, Modifiers::COMMAND | extra),
+                    Some(Message::Delete)
+                ));
+            }
+        } else {
+            assert!(!matches!(
+                on_key(&backspace, Modifiers::COMMAND),
+                Some(Message::Delete)
+            ));
+            assert!(on_key(&Key::Character("a".into()), Modifiers::LOGO).is_none());
+        }
+        assert!(
+            on_key(
+                &Key::Character("a".into()),
+                Modifiers::COMMAND | Modifiers::ALT
+            )
+            .is_none()
+        );
+    }
+
+    fn folder_fixture(roots: Vec<PathBuf>) -> (DirDiff, NodeId, NodeId) {
+        use meld_files::dirdiff::{DirScan, ScanOutcome};
+
+        let mut tree = Tree::new();
+        let root = tree.set_root(provisional_row(&roots));
+        let child_paths: Vec<_> = roots.iter().map(|path| path.join("file")).collect();
+        tree.apply_scan(
+            root,
+            DirScan {
+                roots: Vec::new(),
+                children: vec![provisional_row(&child_paths)],
+                errors: Vec::new(),
+                invalid_filenames: Vec::new(),
+                shadowed: Vec::new(),
+                whitespace: Vec::new(),
+                outcome: ScanOutcome::Entries,
+                differences: false,
+            },
+        );
+        let child = tree.resolve(root, &[0]).unwrap();
+        let visible = tree.flatten();
+        let visible_ids = visible.iter().map(|row| row.id).collect();
+        let mut sel = Selection::default();
+        sel.set(child);
+        let tab = DirDiff {
+            roots,
+            labels: vec![String::new(), String::new()],
+            auto_compare: false,
+            ignore_case: false,
+            normalize_encoding: false,
+            apply_text_filters: false,
+            name_filters: Vec::new(),
+            text_filters: Vec::new(),
+            name_filter_settings: Vec::new(),
+            text_filter_settings: Vec::new(),
+            columns: Vec::new(),
+            comparison: FolderComparison::new(FolderOptions::default(), Vec::new(), Vec::new()),
+            tree,
+            visible,
+            visible_ids,
+            sel,
+            model_gen: 0,
+            jobs: Vec::new(),
+            next_job: 1,
+            progress: String::new(),
+            issues: ScanIssues::default(),
+            banners: Banners::default(),
+            dialog: None,
+            popup: None,
+            ops: VecDeque::new(),
+            op_running: true,
+            modifiers: Modifiers::empty(),
+            scroll_id: iced::widget::Id::unique(),
+            scroll_y: 0.0,
+            view_height: 100.0,
+            row_height: 24.0,
+            text_size: 13.0,
+            last_click: None,
+            marked: None,
+            restore: None,
+            last_folder: None,
+            search: None,
+            context_pending: false,
+            archives: vec![None, None],
+            next_archive: 1,
+        };
+        (tab, root, child)
+    }
+
+    #[test]
+    fn mac_shortcut_regression_folder_activation_compares_selected_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = vec![dir.path().join("left"), dir.path().join("right")];
+        for root in &roots {
+            std::fs::create_dir(root).unwrap();
+            std::fs::write(root.join("file"), "contents").unwrap();
+        }
+        let (mut tab, _, child) = folder_fixture(roots.clone());
+        if let Kind::Entry(row) = &mut tab.tree.node_mut(child).kind {
+            row.is_dir = false;
+            for pane in &mut row.status.panes {
+                pane.is_dir = false;
+            }
+        }
+        let mut events = Vec::new();
+        tab.activate(child, 0, &mut events);
+        assert!(
+            matches!(events.as_slice(), [Event::Open(Comparison::Files { paths, .. })]
+            if paths == &roots.iter().map(|root| Some(root.join("file"))).collect::<Vec<_>>())
+        );
+    }
+
+    #[test]
+    fn mac_shortcut_regression_delete_respects_existing_safeguards() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = vec![dir.path().join("left"), dir.path().join("right")];
+        for root in &roots {
+            std::fs::create_dir(root).unwrap();
+            std::fs::write(root.join("file"), "contents").unwrap();
+        }
+        let (mut tab, root, child) = folder_fixture(roots.clone());
+        let delete_item = tab
+            .action_items(false)
+            .into_iter()
+            .find(|item| {
+                matches!(
+                    item,
+                    menu::Item::Action {
+                        message: Some(Message::Delete),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        assert!(matches!(
+            delete_item,
+            menu::Item::Action {
+                shortcut: Some(ui::FOLDER_DELETE_SHORTCUT),
+                ..
+            }
+        ));
+        let expected_tip = if cfg!(target_os = "macos") {
+            "Delete selected (Cmd+Delete)"
+        } else {
+            "Delete selected (Delete)"
+        };
+        assert_eq!(
+            ui::with_shortcut("Delete selected", ui::FOLDER_DELETE_SHORTCUT),
+            expected_tip
+        );
+        tab.sel.clear();
+        let _ = tab.queue_delete();
+        assert!(tab.ops.is_empty());
+        tab.sel.set(root);
+        let _ = tab.queue_delete();
+        assert!(tab.ops.is_empty());
+        tab.sel.set(child);
+        tab.jobs.push(Job {
+            id: 1,
+            base: root,
+            root: true,
+            cancel: Arc::new(AtomicBool::new(false)),
+            differences: false,
+        });
+        let _ = tab.queue_delete();
+        assert!(tab.ops.is_empty());
+        tab.jobs.clear();
+        if let Kind::Entry(row) = &mut tab.tree.node_mut(child).kind {
+            row.status.panes[0].exists = false;
+        }
+        let _ = tab.queue_delete();
+        assert!(tab.ops.is_empty());
+        if let Kind::Entry(row) = &mut tab.tree.node_mut(child).kind {
+            row.status.panes[0].exists = true;
+        }
+        let _ = tab.queue_delete();
+        assert!(
+            matches!(tab.ops.front(), Some(Op::Delete { node, path, permanently: false }) if *node == child && *path == roots[0].join("file"))
+        );
+        for root in &roots {
+            assert_eq!(
+                std::fs::read_to_string(root.join("file")).unwrap(),
+                "contents"
+            );
+        }
+    }
+
+    #[test]
+    fn mac_shortcut_regression_delete_is_blocked_during_search_or_dialog() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = vec![dir.path().join("left"), dir.path().join("right")];
+        for root in &roots {
+            std::fs::create_dir(root).unwrap();
+            std::fs::write(root.join("file"), "contents").unwrap();
+        }
+        let (mut tab, _, _) = folder_fixture(roots.clone());
+        tab.search = Some(TreeSearch::new("query".into()));
+        let _ = tab.queue_delete();
+        assert!(tab.ops.is_empty(), "search must not queue deletion");
+        tab.search = None;
+        tab.dialog = Some(Dialog::Error {
+            title: "error".into(),
+            message: "error".into(),
+        });
+        let _ = tab.queue_delete();
+        assert!(tab.ops.is_empty(), "dialog must not queue deletion");
+        for root in &roots {
+            assert_eq!(
+                std::fs::read_to_string(root.join("file")).unwrap(),
+                "contents"
+            );
+        }
     }
 
     #[test]

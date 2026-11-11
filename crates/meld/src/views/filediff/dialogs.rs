@@ -71,7 +71,7 @@ fn menu_view<'a>(items: Vec<menu::Item<Message>>) -> Element<'a, Message> {
             } => {
                 let mut r = row![text(label).size(14).width(Length::Fill)].spacing(12);
                 if let Some(s) = shortcut {
-                    r = r.push(text(s).size(12).style(ui::dim_text));
+                    r = r.push(text(ui::shortcut_label(s)).size(12).style(ui::dim_text));
                 }
                 button(r)
                     .width(Length::Fill)

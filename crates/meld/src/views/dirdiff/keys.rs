@@ -208,6 +208,109 @@ where
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::super::{Message, Nav, tree_key};
+    use super::*;
+    use iced::Theme;
+    use iced::advanced::clipboard;
+    use iced::keyboard::{Location, key};
+    use iced::widget::{Space, text_input};
+
+    fn press(
+        content: Element<'_, Message, Theme, ()>,
+        focus: bool,
+        searching: bool,
+        dialog_open: bool,
+        modifiers: Modifiers,
+    ) -> (Vec<Message>, bool) {
+        let mut listener = KeyListener::new(content, move |key, modifiers| {
+            tree_key(key, modifiers, searching, dialog_open)
+        });
+        let mut tree = Tree::new(&listener as &dyn Widget<Message, Theme, ()>);
+        let size = Size::new(200.0, 100.0);
+        let node = listener.layout(&mut tree, &(), &layout::Limits::new(Size::ZERO, size));
+        let viewport = Rectangle::with_size(size);
+        let cursor = mouse::Cursor::Available(Point::new(5.0, 5.0));
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        if focus {
+            let mut shell = Shell::new(&mut messages);
+            listener.update(
+                &mut tree,
+                &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                Layout::new(&node),
+                cursor,
+                &(),
+                &mut clipboard,
+                &mut shell,
+                &viewport,
+            );
+            let mut shell = Shell::new(&mut messages);
+            listener.update(
+                &mut tree,
+                &Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)),
+                Layout::new(&node),
+                cursor,
+                &(),
+                &mut clipboard,
+                &mut shell,
+                &viewport,
+            );
+            messages.clear();
+        }
+        let key = Key::Named(key::Named::Backspace);
+        let event = Event::Keyboard(keyboard::Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: key::Physical::Code(key::Code::Backspace),
+            location: Location::Standard,
+            modifiers,
+            text: None,
+            repeat: false,
+        });
+        let mut shell = Shell::new(&mut messages);
+        listener.update(
+            &mut tree,
+            &event,
+            Layout::new(&node),
+            cursor,
+            &(),
+            &mut clipboard,
+            &mut shell,
+            &viewport,
+        );
+        let captured = shell.is_event_captured();
+        (messages, captured)
+    }
+
+    #[test]
+    fn mac_shortcut_regression_keypressed_routes_and_respects_focused_input() {
+        let blank = || Element::from(Space::new().width(100).height(30));
+        let (messages, captured) = press(blank(), false, false, false, Modifiers::empty());
+        assert!(captured && matches!(messages.as_slice(), [Message::Nav(Nav::Parent, false)]));
+        if cfg!(target_os = "macos") {
+            let (messages, captured) = press(blank(), false, false, false, Modifiers::COMMAND);
+            assert!(captured && matches!(messages.as_slice(), [Message::Delete]));
+            for (searching, dialog_open) in [(true, false), (false, true)] {
+                let (messages, captured) =
+                    press(blank(), false, searching, dialog_open, Modifiers::COMMAND);
+                assert!(!captured && messages.is_empty());
+            }
+            let input = text_input("", "abc")
+                .width(100)
+                .on_input(Message::SearchInput);
+            let (messages, captured) = press(input.into(), true, true, false, Modifiers::COMMAND);
+            assert!(captured);
+            assert!(
+                !messages
+                    .iter()
+                    .any(|message| matches!(message, Message::Delete))
+            );
+        }
+    }
+}
+
 impl<'a, Message, Theme, Renderer> From<KeyListener<'a, Message, Theme, Renderer>>
     for Element<'a, Message, Theme, Renderer>
 where
