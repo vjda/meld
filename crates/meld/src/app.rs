@@ -516,6 +516,12 @@ impl Meld {
         match command {
             Command::Quit => self.quit(),
             Command::NewTab => self.new_tab(),
+            Command::NewBlankFile2Way => {
+                self.update(Message::Open(Comparison::files(vec![None; 2])))
+            }
+            Command::NewBlankFile3Way => {
+                self.update(Message::Open(Comparison::files(vec![None; 3])))
+            }
             Command::Preferences => self.update(Message::ShowDialog(DialogKind::Preferences)),
             Command::Help => {
                 let _ = open::that_detached("https://meld.app/help/");
@@ -1030,6 +1036,55 @@ fn window_icon() -> Option<window::Icon> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn blank_file_comparison_shortcuts_open_separate_tabs_with_the_requested_panes() {
+        use super::*;
+        use crate::command::Bindings;
+        use iced::keyboard::{Key, Modifiers, key::Named};
+
+        let (mut app, _) = Meld::boot();
+        app.shared.shortcuts = Bindings::default();
+        let _ = app.update(Message::IgnoredKey(
+            Key::Character("n".into()),
+            Modifiers::COMMAND,
+        ));
+        let chooser = app.active.expect("New comparison opens a tab");
+        assert!(matches!(
+            app.active_tab().map(|entry| &entry.tab),
+            Some(Tab::New(_))
+        ));
+        let prior_count = app.tabs.len();
+
+        app.shared.shortcuts = Bindings::load(
+            &[
+                ("new-blank-file-2-way".into(), vec!["F6".into()]),
+                ("new-blank-file-3-way".into(), vec!["F12".into()]),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let mut previous = chooser;
+        for (offset, (key, panes)) in [(Named::F6, 2), (Named::F12, 3)].into_iter().enumerate() {
+            let _ = app.update(Message::IgnoredKey(Key::Named(key), Modifiers::empty()));
+            assert_eq!(app.tabs.len(), prior_count + offset + 1);
+            let active = app.active_tab().unwrap();
+            assert_ne!(active.id, previous);
+            let Tab::File(diff) = &active.tab else {
+                panic!("shortcut did not open a file comparison");
+            };
+            assert!((0..panes).all(|pane| diff.pane_geometry(pane).is_some()));
+            assert!(diff.pane_geometry(panes).is_none());
+            assert!(app.tabs.iter().any(|tab| tab.id == previous));
+            previous = active.id;
+        }
+
+        assert!(
+            app.tabs
+                .iter()
+                .any(|tab| tab.id == chooser && matches!(&tab.tab, Tab::New(_)))
+        );
+    }
+
     #[test]
     fn mac_shortcut_regression_modal_blocks_only_folder_deletion() {
         use crate::views::{self, dirdiff};

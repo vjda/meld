@@ -95,6 +95,8 @@ use Command::*;
 actions! {
     "Windows and Tabs" {
         "new-tab": "New comparison", NewTab, Window, App, &["Primary+N"];
+        "new-blank-file-2-way": "New blank file comparison (2-way)", NewBlankFile2Way, Window, App, &[];
+        "new-blank-file-3-way": "New blank file comparison (3-way)", NewBlankFile3Way, Window, App, &[];
         "close-tab": "Close a comparison", CloseTab, Window, App, &["Primary+W"];
         "quit": "Quit Meld", Quit, Window, App, &["Primary+Q"];
         "previous-tab": "Go to previous tab", PreviousTab, Window, App, &["Primary+PgUp", "Primary+Shift+Tab"];

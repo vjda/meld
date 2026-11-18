@@ -36,6 +36,8 @@ pub enum Command {
     GearMenu,
     Fullscreen,
     NewTab,
+    NewBlankFile2Way,
+    NewBlankFile3Way,
     NextTab,
     PreviousTab,
     SelectTab(usize),
