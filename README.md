@@ -116,6 +116,11 @@ without replacing other bindings; **Reset action** restores all its defaults.
 Changes use the existing `meld/settings.toml` under the platform config
 folder (on macOS, `~/Library/Application Support`).
 
+To skip the comparison picker, use the **New blank file comparison** or
+**New blank folder comparison** actions below **New comparison**. Both have
+**2-way** and **3-way** options that open a new tab with empty panes.
+None has a shortcut assigned by default.
+
 **Quick macOS check:** Quit the running Meld RS, rebuild from this checkout
 with `scripts/macos-install.sh`, then open the rebuilt **Meld RS**. Use an
 empty comparison tab and start with default bindings for **New comparison**

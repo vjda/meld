@@ -545,6 +545,40 @@ mod tests {
     }
 
     #[test]
+    fn blank_comparison_shortcuts_follow_new_comparison_and_start_unbound() {
+        let index = ACTIONS.iter().position(|a| a.id == "new-tab").unwrap();
+        let ids = [
+            "new-blank-file-2-way",
+            "new-blank-file-3-way",
+            "new-blank-folder-2-way",
+            "new-blank-folder-3-way",
+        ];
+        let blank_actions = &ACTIONS[index + 1..][..ids.len()];
+        let mut f = Fixture::new();
+
+        for (action, id) in blank_actions.iter().zip(ids) {
+            assert_eq!(action.id, id);
+            assert_eq!((action.group)(), (ACTIONS[index].group)());
+            assert!(f.bindings.alternatives(action).is_empty());
+
+            f.send(Message::Toggle(id));
+            f.send(Message::Record(None));
+            f.press(Named::F6, false);
+            f.send(Message::Save);
+            let stored = Settings::load_from(f.dir.path().join("settings.toml"));
+            assert_eq!(
+                Bindings::load(&stored.shortcuts).labels(id).as_deref(),
+                Some("F6")
+            );
+
+            f.send(Message::Reset);
+            let stored = Settings::load_from(f.dir.path().join("settings.toml"));
+            assert!(!stored.shortcuts.contains_key(id));
+            assert_eq!(f.bindings.labels(id), None);
+        }
+    }
+
+    #[test]
     fn shortcut_editor_restore_one_unbind_and_reset() {
         let mut f = Fixture::new();
         f.send(Message::Toggle("refresh"));
