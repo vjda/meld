@@ -1906,6 +1906,14 @@ impl GitCompare {
         }
     }
 
+    pub fn shortcut_context(&self) -> crate::command::Context {
+        if self.content == Content::Diff {
+            crate::command::Context::GitDiff
+        } else {
+            crate::command::Context::Git
+        }
+    }
+
     pub fn command(
         &mut self,
         command: Command,
@@ -2024,17 +2032,19 @@ impl GitCompare {
             self.current.as_ref(),
             step,
         ) {
-            Some(entry) if Some(&entry) != self.current.as_ref() => {
-                menu::Item::action(label, Some(shortcut), Message::SelectFile(entry))
-            }
+            Some(entry) if Some(&entry) != self.current.as_ref() => menu::Item::with_hint(
+                label,
+                shared.shortcuts.labels(shortcut),
+                Some(Message::SelectFile(entry)),
+            ),
             _ => menu::Item::disabled(label),
         };
-        items.push(file(tr!("Next Changed File"), "Alt+F7", 1));
-        items.push(file(tr!("Previous Changed File"), "Alt+Shift+F7", -1));
-        items.push(menu::Item::action(
+        items.push(file(tr!("Next Changed File"), "next-file", 1));
+        items.push(file(tr!("Previous Changed File"), "previous-file", -1));
+        items.push(menu::Item::with_hint(
             tr!("Reload"),
-            Some("Ctrl+R"),
-            Message::Reload,
+            shared.shortcuts.labels("refresh"),
+            Some(Message::Reload),
         ));
         items.push(menu::Item::Separator);
         items.push(if self.view.is_some() {

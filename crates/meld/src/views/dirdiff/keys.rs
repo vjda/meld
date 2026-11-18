@@ -210,8 +210,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::super::{Message, Nav, tree_key};
+    use super::super::{Message, Nav, tree_key_with_bindings};
     use super::*;
+    use crate::command::{Bindings, Command, Context};
     use iced::Theme;
     use iced::advanced::clipboard;
     use iced::keyboard::{Location, key};
@@ -222,10 +223,25 @@ mod tests {
         focus: bool,
         searching: bool,
         dialog_open: bool,
+        key: Key,
         modifiers: Modifiers,
-    ) -> (Vec<Message>, bool) {
+        bindings: &Bindings,
+    ) -> (Vec<Message>, bool, Option<Command>) {
         let mut listener = KeyListener::new(content, move |key, modifiers| {
-            tree_key(key, modifiers, searching, dialog_open)
+            tree_key_with_bindings(bindings, key, modifiers, searching, dialog_open)
+        })
+        .intercept(move |key, modifiers| {
+            searching
+                .then(|| {
+                    crate::ui::search::entry_key_with_bindings(
+                        bindings,
+                        Context::Folder,
+                        key,
+                        modifiers,
+                    )
+                })
+                .flatten()
+                .map(Message::SearchKey)
         });
         let mut tree = Tree::new(&listener as &dyn Widget<Message, Theme, ()>);
         let size = Size::new(200.0, 100.0);
@@ -259,11 +275,10 @@ mod tests {
             );
             messages.clear();
         }
-        let key = Key::Named(key::Named::Backspace);
         let event = Event::Keyboard(keyboard::Event::KeyPressed {
             key: key.clone(),
-            modified_key: key,
-            physical_key: key::Physical::Code(key::Code::Backspace),
+            modified_key: key.clone(),
+            physical_key: key::Physical::Unidentified(key::NativeCode::Unidentified),
             location: Location::Standard,
             modifiers,
             text: None,
@@ -281,26 +296,145 @@ mod tests {
             &viewport,
         );
         let captured = shell.is_event_captured();
-        (messages, captured)
+        let fallback = if captured {
+            None
+        } else {
+            bindings.resolve(Context::Folder, &key, modifiers)
+        };
+        (messages, captured, fallback)
+    }
+
+    #[test]
+    fn shortcut_folder_search_and_delete_keep_their_owners() {
+        use crate::command::{Alternative, Chord};
+        use crate::ui::search::{EntryKey, Step};
+        use key::Named;
+
+        let empty = Modifiers::empty();
+        let bindings = Bindings::default();
+        let search = |bindings, key, modifiers| {
+            let input = text_input("", "abc")
+                .width(100)
+                .on_input(Message::SearchInput);
+            press(input.into(), true, true, false, key, modifiers, bindings)
+        };
+        let (messages, captured, fallback) =
+            search(&bindings, Key::Character("g".into()), Modifiers::COMMAND);
+        assert!(
+            captured
+                && matches!(
+                    messages.as_slice(),
+                    [Message::SearchKey(EntryKey::Step(Step::Next))]
+                )
+        );
+        assert_eq!(fallback, None);
+        let (messages, captured, fallback) = search(&bindings, Key::Named(Named::F3), empty);
+        assert!(!captured && messages.is_empty());
+        assert_eq!(fallback, Some(Command::FindNext)); // Folder ignores this app command.
+        let (messages, captured, fallback) = search(&bindings, Key::Named(Named::Escape), empty);
+        assert!(captured && matches!(messages.as_slice(), [Message::SearchKey(EntryKey::Close)]));
+        assert_eq!(fallback, None);
+        let (messages, captured, fallback) = search(&bindings, Key::Named(Named::Enter), empty);
+        assert!(
+            captured
+                && matches!(
+                    messages.as_slice(),
+                    [Message::SearchKey(EntryKey::Activate)]
+                )
+        );
+        assert_eq!(fallback, None);
+
+        let custom = Alternative::Custom(Chord::parse("F6").unwrap());
+        let bindings = bindings
+            .edited("folder-find-next", Some(vec![custom.clone()]))
+            .unwrap();
+        let (messages, captured, fallback) = search(&bindings, Key::Named(Named::F6), empty);
+        assert!(
+            captured
+                && matches!(
+                    messages.as_slice(),
+                    [Message::SearchKey(EntryKey::Step(Step::Next))]
+                )
+        );
+        assert_eq!(fallback, None);
+        let key = |bindings, named, modifiers| {
+            let blank = Space::new().width(100).height(30);
+            press(
+                blank.into(),
+                false,
+                false,
+                false,
+                Key::Named(named),
+                modifiers,
+                bindings,
+            )
+        };
+        let (messages, captured, fallback) = key(&bindings, Named::Delete, empty);
+        assert!(!captured && messages.is_empty());
+        assert_eq!(fallback, Some(Command::Delete));
+        let bindings = bindings
+            .edited("folder-delete", Some(vec![custom]))
+            .unwrap_err();
+        assert!(matches!(
+            bindings,
+            crate::command::BindingError::Conflict {
+                action: "folder-find-next",
+                ..
+            }
+        ));
+        let unbound = Bindings::default()
+            .edited("folder-delete", Some(vec![]))
+            .unwrap();
+        let (messages, captured, fallback) = key(&unbound, Named::Delete, empty);
+        assert!(!captured && messages.is_empty());
+        assert_eq!(fallback, None);
+        if cfg!(target_os = "macos") {
+            let (messages, captured, fallback) =
+                key(&unbound, Named::Backspace, Modifiers::COMMAND);
+            assert!(!captured && messages.is_empty());
+            assert_eq!(fallback, None);
+        }
+        let (messages, captured, fallback) = key(&unbound, Named::Backspace, empty);
+        assert!(captured && matches!(messages.as_slice(), [Message::Nav(Nav::Parent, false)]));
+        assert_eq!(fallback, None);
     }
 
     #[test]
     fn mac_shortcut_regression_keypressed_routes_and_respects_focused_input() {
         let blank = || Element::from(Space::new().width(100).height(30));
-        let (messages, captured) = press(blank(), false, false, false, Modifiers::empty());
+        let bindings = Bindings::default();
+        let press = |content, focus, searching, dialog_open, modifiers| {
+            press(
+                content,
+                focus,
+                searching,
+                dialog_open,
+                Key::Named(key::Named::Backspace),
+                modifiers,
+                &bindings,
+            )
+        };
+        let (messages, captured, fallback) =
+            press(blank(), false, false, false, Modifiers::empty());
+        assert_eq!(fallback, None);
         assert!(captured && matches!(messages.as_slice(), [Message::Nav(Nav::Parent, false)]));
         if cfg!(target_os = "macos") {
-            let (messages, captured) = press(blank(), false, false, false, Modifiers::COMMAND);
+            let (messages, captured, fallback) =
+                press(blank(), false, false, false, Modifiers::COMMAND);
+            assert_eq!(fallback, None);
             assert!(captured && matches!(messages.as_slice(), [Message::Delete]));
             for (searching, dialog_open) in [(true, false), (false, true)] {
-                let (messages, captured) =
+                let (messages, captured, fallback) =
                     press(blank(), false, searching, dialog_open, Modifiers::COMMAND);
                 assert!(!captured && messages.is_empty());
+                assert_eq!(fallback, None);
             }
             let input = text_input("", "abc")
                 .width(100)
                 .on_input(Message::SearchInput);
-            let (messages, captured) = press(input.into(), true, true, false, Modifiers::COMMAND);
+            let (messages, captured, fallback) =
+                press(input.into(), true, true, false, Modifiers::COMMAND);
+            assert_eq!(fallback, None);
             assert!(captured);
             assert!(
                 !messages

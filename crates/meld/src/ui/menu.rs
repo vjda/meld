@@ -18,7 +18,7 @@ use iced::{Element, Event, Length, Padding, Point, Rectangle, Renderer, Size, Th
 pub enum Item<M> {
     Action {
         label: String,
-        shortcut: Option<&'static str>,
+        shortcut: Option<String>,
         message: Option<M>,
     },
     Toggle {
@@ -32,10 +32,18 @@ pub enum Item<M> {
 
 impl<M> Item<M> {
     pub fn action(label: impl Into<String>, shortcut: Option<&'static str>, message: M) -> Self {
+        Self::with_hint(label, shortcut.map(super::shortcut_label), Some(message))
+    }
+
+    pub fn with_hint(
+        label: impl Into<String>,
+        shortcut: Option<String>,
+        message: Option<M>,
+    ) -> Self {
         Item::Action {
             label: label.into(),
             shortcut,
-            message: Some(message),
+            message,
         }
     }
 
@@ -188,11 +196,7 @@ fn item_view<'a, M: Clone + 'a>(item: Item<M>) -> Element<'a, M> {
         } => {
             let mut r = row![text(label).size(14).width(Length::Fill)].spacing(12);
             if let Some(s) = shortcut {
-                r = r.push(
-                    text(super::shortcut_label(s))
-                        .size(12)
-                        .style(super::dim_text),
-                );
+                r = r.push(text(s).size(12).style(super::dim_text));
             }
             button(r)
                 .width(Length::Fill)

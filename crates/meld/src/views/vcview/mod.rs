@@ -1412,33 +1412,41 @@ impl VcView {
         let refresh = if scanning {
             ui::tool_button(
                 icon::STOP,
-                ui::with_shortcut(tr!("Stop the scan"), "Escape"),
+                shared.shortcuts.tip(tr!("Stop the scan"), "stop"),
                 Some(Message::Stop),
             )
         } else {
             ui::tool_button(
                 icon::REFRESH,
-                ui::with_shortcut(tr!("Refresh Comparison"), "Ctrl+R"),
+                shared.shortcuts.tip(tr!("Refresh Comparison"), "refresh"),
                 Some(Message::Refresh),
             )
         };
         let console_tip = if shared.settings.vc_console_visible {
-            ui::with_shortcut(tr!("Hide the console output"), "F9")
+            shared
+                .shortcuts
+                .tip(tr!("Hide the console output"), "vc-console")
         } else {
-            ui::with_shortcut(tr!("Show the console output"), "F9")
+            shared
+                .shortcuts
+                .tip(tr!("Show the console output"), "vc-console")
         };
         row![
             space::horizontal(),
             ui::tool_button(
                 icon::UP,
-                ui::with_shortcut(tr!("Go to the previous change"), "Alt+Up"),
+                shared
+                    .shortcuts
+                    .tip(tr!("Go to the previous change"), "previous-change"),
                 self.tree
                     .find_change(false)
                     .map(|_| Message::PreviousChange)
             ),
             ui::tool_button(
                 icon::DOWN,
-                ui::with_shortcut(tr!("Go to the next change"), "Alt+Down"),
+                shared
+                    .shortcuts
+                    .tip(tr!("Go to the next change"), "next-change"),
                 self.tree.find_change(true).map(|_| Message::NextChange)
             ),
             refresh,
@@ -1450,19 +1458,17 @@ impl VcView {
     }
 
     pub fn menu_items(&self, shared: &Shared) -> Vec<menu::Item<Message>> {
-        let action =
-            |label: &str, shortcut: Option<&'static str>, act: Act| match self.act_message(act) {
-                Some(message) => menu::Item::action(label, shortcut, message),
-                None => menu::Item::Action {
-                    label: label.to_string(),
-                    shortcut,
-                    message: None,
-                },
-            };
+        let action = |label: &str, id: Option<&str>, act: Act| {
+            menu::Item::with_hint(
+                label,
+                id.and_then(|id| shared.shortcuts.labels(id)),
+                self.act_message(act),
+            )
+        };
         let mut items = vec![
             menu::Item::Heading(tr!("Version control").into()),
-            action(tr!("Compare"), Some("Return"), Act::Compare),
-            action(tr!("Commit…"), Some("Ctrl+M"), Act::Commit),
+            action(tr!("Compare"), Some("vc-compare"), Act::Compare),
+            action(tr!("Commit…"), Some("vc-commit"), Act::Commit),
             action(tr!("Update"), None, Act::Update),
             action(tr!("Push…"), None, Act::Push),
             menu::Item::Separator,
@@ -1471,14 +1477,18 @@ impl VcView {
             action(tr!("Remove"), None, Act::Remove),
             action(tr!("Revert…"), None, Act::Revert),
             action(tr!("Resolve Conflict"), None, Act::Resolve),
-            action(tr!("Delete"), Some("Delete"), Act::Delete),
+            action(tr!("Delete"), Some("vc-delete"), Act::Delete),
             action(
                 tr!("Open Externally"),
-                Some("Ctrl+Shift+O"),
+                Some("vc-open-external"),
                 Act::OpenExternal,
             ),
             menu::Item::Separator,
-            menu::Item::action(tr!("Refresh Comparison"), Some("Ctrl+R"), Message::Refresh),
+            menu::Item::with_hint(
+                tr!("Refresh Comparison"),
+                shared.shortcuts.labels("refresh"),
+                Some(Message::Refresh),
+            ),
             menu::Item::Separator,
             menu::Item::Heading(tr!("Version Filters").into()),
         ];
@@ -1509,7 +1519,7 @@ impl VcView {
     }
 
     pub fn view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
-        let mut content = column![self.action_bar(), ui::separator(false)];
+        let mut content = column![self.action_bar(shared), ui::separator(false)];
         let mut lower = column![self.filter_bar(), ui::separator(false)];
         if let Some((primary, secondary)) = &self.error {
             lower = lower.push(ui::banner(
@@ -1582,7 +1592,13 @@ impl VcView {
         )
         .intercept(move |key, modifiers| {
             if searching {
-                search::entry_key(key, modifiers).map(Message::SearchKey)
+                search::entry_key_with_bindings(
+                    &shared.shortcuts,
+                    crate::command::Context::Vc,
+                    key,
+                    modifiers,
+                )
+                .map(Message::SearchKey)
             } else {
                 None
             }
@@ -1640,7 +1656,7 @@ impl VcView {
         .into()
     }
 
-    fn action_bar(&self) -> Element<'_, Message> {
+    fn action_bar(&self, shared: &Shared) -> Element<'_, Message> {
         let tool = |glyph: &'static str, tip: String, act: Act| {
             ui::tool_button(glyph, tip, self.act_message(act))
         };
@@ -1648,10 +1664,11 @@ impl VcView {
         let commit = iced::widget::tooltip(
             commit,
             container(
-                text(ui::with_shortcut(
-                    tr!("Commit changes to version control"),
-                    "Ctrl+M",
-                ))
+                text(
+                    shared
+                        .shortcuts
+                        .tip(tr!("Commit changes to version control"), "vc-commit"),
+                )
                 .size(13),
             )
             .padding([4, 8])
@@ -1696,12 +1713,16 @@ impl VcView {
             ui::separator(true),
             tool(
                 "⇄",
-                ui::with_shortcut(tr!("Compare selected files"), "Return"),
+                shared
+                    .shortcuts
+                    .tip(tr!("Compare selected files"), "vc-compare"),
                 Act::Compare
             ),
             tool(
                 "↗",
-                ui::with_shortcut(tr!("Open in an external editor"), "Ctrl+Shift+O"),
+                shared
+                    .shortcuts
+                    .tip(tr!("Open in an external editor"), "vc-open-external"),
                 Act::OpenExternal
             ),
             tool(

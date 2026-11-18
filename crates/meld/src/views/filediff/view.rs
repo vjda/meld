@@ -604,7 +604,7 @@ impl FileDiff {
         r.into()
     }
 
-    pub(super) fn toolbar_view<'a>(&'a self, _shared: &'a Shared) -> Element<'a, Message> {
+    pub(super) fn toolbar_view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
         let s = self.current_sensitivity();
         let mut r = row![].spacing(2).align_y(Alignment::Center);
         if self.is_loading() {
@@ -612,23 +612,31 @@ impl FileDiff {
         }
         r = r.push(ui::tool_button(
             icon::UP,
-            ui::with_shortcut(tr!("Go to the previous change"), "Alt+Up"),
+            shared
+                .shortcuts
+                .tip(tr!("Go to the previous change"), "previous-change"),
             self.cursor.prev.map(|_| act(Act::PrevChange)),
         ));
         r = r.push(ui::tool_button(
             icon::DOWN,
-            ui::with_shortcut(tr!("Go to the next change"), "Alt+Down"),
+            shared
+                .shortcuts
+                .tip(tr!("Go to the next change"), "next-change"),
             self.cursor.next.map(|_| act(Act::NextChange)),
         ));
         if self.panes.len() == 3 {
             r = r.push(ui::tool_button(
                 icon::CONFLICT_PREV,
-                ui::with_shortcut(tr!("Go to the previous conflict"), "Ctrl+J"),
+                shared
+                    .shortcuts
+                    .tip(tr!("Go to the previous conflict"), "previous-conflict"),
                 self.cursor.prev_conflict.map(|_| act(Act::PrevConflict)),
             ));
             r = r.push(ui::tool_button(
                 icon::CONFLICT_NEXT,
-                ui::with_shortcut(tr!("Go to the next conflict"), "Ctrl+K"),
+                shared
+                    .shortcuts
+                    .tip(tr!("Go to the next conflict"), "next-conflict"),
                 self.cursor.next_conflict.map(|_| act(Act::NextConflict)),
             ));
         }
@@ -636,12 +644,16 @@ impl FileDiff {
             r = r.push(Space::new().width(8));
             r = r.push(ui::tool_button(
                 icon::LEFT,
-                ui::with_shortcut(tr!("Push current change to the left"), "Alt+Left"),
+                shared
+                    .shortcuts
+                    .tip(tr!("Push current change to the left"), "push-left"),
                 s.push_left.then_some(act(Act::PushLeft)),
             ));
             r = r.push(ui::tool_button(
                 icon::RIGHT,
-                ui::with_shortcut(tr!("Push current change to the right"), "Alt+Right"),
+                shared
+                    .shortcuts
+                    .tip(tr!("Push current change to the right"), "push-right"),
                 s.push_right.then_some(act(Act::PushRight)),
             ));
             r = r.push(ui::tool_button(
@@ -651,7 +663,7 @@ impl FileDiff {
             ));
             r = r.push(ui::tool_button(
                 "⌦",
-                ui::with_shortcut(tr!("Delete change"), "Alt+Delete"),
+                shared.shortcuts.tip(tr!("Delete change"), "delete-change"),
                 s.delete.then_some(act(Act::DeleteChange)),
             ));
         }
@@ -665,14 +677,15 @@ impl FileDiff {
         r.into()
     }
 
-    pub(super) fn menu(&self, _shared: &Shared) -> Vec<menu::Item<Message>> {
+    pub(super) fn menu(&self, shared: &Shared) -> Vec<menu::Item<Message>> {
         use menu::Item;
-        let action =
-            |label: &str, shortcut: Option<&'static str>, enabled: bool, a: Act| Item::Action {
-                label: label.to_string(),
-                shortcut,
-                message: enabled.then_some(act(a)),
-            };
+        let action = |label: &str, id: Option<&str>, enabled: bool, a: Act| {
+            Item::with_hint(
+                label,
+                id.and_then(|id| shared.shortcuts.labels(id)),
+                enabled.then_some(act(a)),
+            )
+        };
         let n = self.panes.len();
         let focus = self.focus_pane();
         let modified_focus = focus.is_some_and(|p| self.is_modified(p));
@@ -682,31 +695,31 @@ impl FileDiff {
         let mut items = vec![
             action(
                 tr!("Save As…"),
-                Some("Ctrl+Shift+S"),
+                Some("save-as"),
                 focus.is_some(),
                 Act::SaveAs,
             ),
             action(
                 tr!("Save All"),
-                Some("Ctrl+Shift+L"),
+                Some("save-all"),
                 any_modified,
                 Act::SaveAll,
             ),
             action(tr!("Revert Files…"), None, true, Act::Revert),
             action(
                 tr!("Open Externally"),
-                Some("Ctrl+Shift+O"),
+                Some("open-external"),
                 focus.is_some_and(|p| self.panes[p].file.path.is_some()),
                 Act::OpenExternal,
             ),
             Item::Separator,
             action(
                 tr!("Refresh Comparison"),
-                Some("Ctrl+R"),
+                Some("refresh"),
                 self.cmp.is_some(),
                 Act::Refresh,
             ),
-            action(tr!("Find…"), Some("Ctrl+F"), true, Act::Find),
+            action(tr!("Find…"), Some("find"), true, Act::Find),
             Item::Separator,
             Item::toggle(
                 tr!("Overview Map"),
@@ -722,7 +735,7 @@ impl FileDiff {
         if n == 2 {
             items.push(action(
                 tr!("Swap Left and Right Panes"),
-                Some("Alt+\\"),
+                Some("swap-panes"),
                 true,
                 Act::Swap,
             ));

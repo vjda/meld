@@ -2,36 +2,12 @@
 //! unsaved-changes prompt on quit.
 
 pub mod preferences;
+pub mod shortcuts;
 
-use iced::widget::{button, column, container, row, scrollable, text};
-use iced::{Element, Length};
+use iced::Element;
+use iced::widget::{button, column, text};
 
-use crate::command::shortcuts as shortcut_list;
 use crate::ui::{self, modal::dialog};
-
-pub fn shortcuts<'a, M: Clone + 'a>(on_close: M) -> Element<'a, M> {
-    let mut sections = column![].spacing(18);
-    for (heading, entries) in shortcut_list() {
-        let mut list = column![text(heading).size(15).font(ui::bold())].spacing(4);
-        for (keys, action) in entries {
-            list = list.push(
-                row![
-                    text(action).size(14).width(Length::Fill),
-                    text(ui::shortcut_label(keys)).size(13).style(ui::dim_text)
-                ]
-                .spacing(16),
-            );
-        }
-        sections = sections.push(list);
-    }
-    dialog(
-        tr!("Keyboard Shortcuts"),
-        scrollable(container(sections).padding([0, 12]))
-            .height(480)
-            .width(560),
-        vec![button(text(tr!("Close"))).on_press(on_close).into()],
-    )
-}
 
 pub fn about<'a, M: Clone + 'a>(on_close: M) -> Element<'a, M> {
     let body = column![

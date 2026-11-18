@@ -294,7 +294,7 @@ impl ImageDiff {
         Subscription::none()
     }
 
-    pub fn toolbar<'a>(&'a self, _shared: &'a Shared) -> Element<'a, Message> {
+    pub fn toolbar<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
         let scale_label = match self.zoom {
             Zoom::Fit => tr!("Fit").to_string(),
             Zoom::Scale(s) => format!("{:.0}%", s * 100.0),
@@ -315,10 +315,9 @@ impl ImageDiff {
                 tr!("Highlight differences"),
                 Some(Message::ToggleDifferences)
             ),
-            tool_button(
+            ui::tool_button(
                 ui::icon::REFRESH,
-                tr!("Reload"),
-                "Ctrl+R",
+                shared.shortcuts.tip(tr!("Reload"), "refresh"),
                 Some(Message::Reload)
             ),
         ]
@@ -327,7 +326,7 @@ impl ImageDiff {
         .into()
     }
 
-    pub fn menu_items(&self, _shared: &Shared) -> Vec<menu::Item<Message>> {
+    pub fn menu_items(&self, shared: &Shared) -> Vec<menu::Item<Message>> {
         vec![
             menu::Item::toggle(
                 tr!("Zoom to Fit"),
@@ -348,14 +347,18 @@ impl ImageDiff {
                 Message::ToggleLock,
             ),
             menu::Item::Separator,
-            menu::Item::action(
+            menu::Item::with_hint(
                 tr!("Open Externally"),
-                Some("Ctrl+Shift+O"),
-                Message::OpenExternal,
+                shared.shortcuts.labels("open-external"),
+                Some(Message::OpenExternal),
             ),
             menu::Item::action(tr!("Open Containing Folder"), None, Message::OpenFolder),
             menu::Item::action(tr!("Copy Full Path"), None, Message::CopyPath),
-            menu::Item::action(tr!("Reload"), Some("Ctrl+R"), Message::Reload),
+            menu::Item::with_hint(
+                tr!("Reload"),
+                shared.shortcuts.labels("refresh"),
+                Some(Message::Reload),
+            ),
         ]
     }
 
@@ -660,14 +663,6 @@ fn compare(images: &[Arc<Decoded>]) -> Comparison {
 
 /// A toolbar button like [`ui::tool_button`], whose tooltip is the
 /// translated `tip` followed by its shortcut.
-fn tool_button<'a>(
-    glyph: &'a str,
-    tip: &str,
-    shortcut: &str,
-    on_press: Option<Message>,
-) -> Element<'a, Message> {
-    ui::tool_button(glyph, ui::with_shortcut(tip, shortcut), on_press)
-}
 
 fn byte_size(size: u64) -> String {
     const SUFFIXES: [&str; 5] = ["B", "kB", "MB", "GB", "TB"];

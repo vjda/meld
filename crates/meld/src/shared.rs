@@ -8,10 +8,18 @@ use meld_config::{
     ComparisonType, RecentComparison, RecentComparisons, Rgba, SchemeManager, Settings, StyleAttr,
 };
 
+use crate::command::{Alternative, BindingError, Bindings};
 use crate::comparison::Comparison;
+
+#[derive(Debug)]
+pub enum ShortcutEditError {
+    Binding(BindingError),
+    Save(meld_config::ConfigError),
+}
 
 pub struct Shared {
     pub settings: Settings,
+    pub shortcuts: Bindings,
     pub schemes: SchemeManager,
     /// The resolved style scheme, for diff and syntax colors.
     pub style: meld_config::Theme,
@@ -28,7 +36,9 @@ pub struct Shared {
 
 impl Shared {
     pub fn load() -> Self {
-        let settings = Settings::load();
+        let mut settings = Settings::load();
+        let shortcuts = Bindings::load(&settings.shortcuts);
+        settings.shortcuts = shortcuts.overrides();
         let schemes = SchemeManager::new();
         let system_dark = detect_system_dark();
         let style = meld_config::Theme::from_settings(&schemes, &settings, system_dark);
@@ -40,6 +50,7 @@ impl Shared {
             system_monospace: system_monospace_font(),
             mono_font: Font::MONOSPACE,
             settings,
+            shortcuts,
             schemes,
             style,
         };
@@ -66,6 +77,21 @@ impl Shared {
         if let Err(err) = self.settings.save() {
             log::warn!("could not save settings: {err}");
         }
+    }
+
+    /// Validate a candidate, save through the normal settings writer, then publish.
+    pub fn edit_shortcut(
+        &mut self,
+        id: &str,
+        alternatives: Option<Vec<Alternative>>,
+    ) -> Result<(), ShortcutEditError> {
+        apply_shortcut_edit(
+            &mut self.settings,
+            &mut self.shortcuts,
+            id,
+            alternatives,
+            Settings::save,
+        )
     }
 
     /// Re-resolves the style scheme, iced theme and fonts after a settings
@@ -122,6 +148,97 @@ impl Shared {
             .filter_map(|entry| Some((entry.display_name(), comparison_from_recent(entry)?)))
             .collect()
     }
+}
+
+fn apply_shortcut_edit(
+    settings: &mut Settings,
+    bindings: &mut Bindings,
+    id: &str,
+    alternatives: Option<Vec<Alternative>>,
+    save: impl FnOnce(&Settings) -> Result<(), meld_config::ConfigError>,
+) -> Result<(), ShortcutEditError> {
+    let candidate = bindings
+        .edited(id, alternatives)
+        .map_err(ShortcutEditError::Binding)?;
+    let mut next_settings = settings.clone();
+    next_settings.shortcuts = candidate.overrides();
+    save(&next_settings).map_err(ShortcutEditError::Save)?;
+    *settings = next_settings;
+    *bindings = candidate;
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn shortcut_save_is_atomic_with_respect_to_live_bindings() {
+    use crate::command::{Chord, Command, Context};
+    use iced::keyboard::{Key, Modifiers, key::Named};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.toml");
+    let mut settings = Settings::default();
+    let mut bindings = Bindings::default();
+    let chord = Alternative::Custom(Chord::parse("Control+F6").unwrap());
+    let f1 = Key::Named(Named::F1);
+    let f6 = Key::Named(Named::F6);
+    assert!(matches!(
+        apply_shortcut_edit(
+            &mut settings,
+            &mut bindings,
+            "help",
+            Some(vec![chord.clone()]),
+            |s| s.save_to(dir.path())
+        ),
+        Err(ShortcutEditError::Save(_))
+    ));
+    assert!(settings.shortcuts.is_empty());
+    assert_eq!(
+        bindings.resolve(Context::New, &f1, Modifiers::empty()),
+        Some(Command::Help)
+    );
+    apply_shortcut_edit(
+        &mut settings,
+        &mut bindings,
+        "help",
+        Some(vec![chord]),
+        |s| s.save_to(&path),
+    )
+    .unwrap();
+    let reloaded = Settings::load_from(&path);
+    assert_eq!(reloaded, settings);
+    for map in [&bindings, &Bindings::load(&reloaded.shortcuts)] {
+        assert_eq!(map.resolve(Context::New, &f1, Modifiers::empty()), None);
+        assert_eq!(
+            map.resolve(Context::New, &f6, Modifiers::CTRL),
+            Some(Command::Help)
+        );
+        if cfg!(target_os = "macos") {
+            assert_eq!(map.resolve(Context::New, &f6, Modifiers::COMMAND), None);
+            assert_eq!(map.labels("help").as_deref(), Some("Ctrl+F6"));
+        }
+    }
+    let error = apply_shortcut_edit(
+        &mut settings,
+        &mut bindings,
+        "quit",
+        Some(vec![Alternative::Custom(
+            Chord::parse("Control+F6").unwrap(),
+        )]),
+        |_| panic!("conflicts must not reach the writer"),
+    );
+    assert!(matches!(
+        error,
+        Err(ShortcutEditError::Binding(BindingError::Conflict {
+            action: "help",
+            ..
+        }))
+    ));
+    assert_eq!(settings, reloaded);
+    assert_eq!(Settings::load_from(&path), reloaded);
+    assert_eq!(
+        bindings.resolve(Context::New, &f6, Modifiers::CTRL),
+        Some(Command::Help)
+    );
 }
 
 /// Converts a config color to an iced color.

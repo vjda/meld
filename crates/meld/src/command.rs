@@ -6,6 +6,9 @@
 
 use iced::keyboard::{Key, Modifiers, key::Named};
 
+mod bindings;
+pub use bindings::{ACTIONS, Alternative, BindingError, Bindings, Chord, Context};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Quit,
@@ -146,11 +149,11 @@ pub fn from_key(key: &Key, modifiers: Modifiers) -> Option<Command> {
     Some(command)
 }
 
-/// A heading and its (keys, action) rows in the keyboard shortcuts window.
+/// Legacy display fixture for regression tests.
+#[cfg(test)]
 pub type ShortcutGroup = (&'static str, Vec<(&'static str, &'static str)>);
 
-/// Shortcut list for the keyboard shortcuts window (`help-overlay.ui`),
-/// translated.
+#[cfg(test)]
 pub fn shortcuts() -> Vec<ShortcutGroup> {
     vec![
         (
@@ -343,6 +346,99 @@ mod tests {
         };
         assert!(folder.1.iter().any(|(keys, _)| *keys == expected));
         assert!(file.1.iter().any(|(keys, _)| *keys == "Alt+Delete"));
+    }
+
+    #[test]
+    fn shortcut_unbound_help_does_not_dispatch() {
+        let settings = meld_config::Settings::from_toml_str("[shortcuts]\nhelp = []").unwrap();
+        assert!(settings.to_toml_string().unwrap().contains("help = []"));
+        assert_eq!(
+            Bindings::load(&settings.shortcuts).resolve(
+                Context::New,
+                &Key::Named(Named::F1),
+                Modifiers::empty()
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn shortcut_individual_restore_and_overlapping_routes() {
+        let custom = |chord| Alternative::Custom(Chord::parse(chord).unwrap());
+        let defaults = Bindings::default();
+        let changed = defaults
+            .edited("refresh", Some(vec![custom("F6")]))
+            .unwrap();
+        let restored = changed
+            .edited("refresh", Some(vec![custom("F6"), Alternative::Default(1)]))
+            .unwrap();
+        for (key, modifiers, command) in [
+            (
+                Key::Named(Named::F6),
+                Modifiers::empty(),
+                Some(Command::Refresh),
+            ),
+            (
+                Key::Named(Named::F5),
+                Modifiers::empty(),
+                Some(Command::Refresh),
+            ),
+            (Key::Character("r".into()), Modifiers::COMMAND, None),
+        ] {
+            assert_eq!(restored.resolve(Context::File, &key, modifiers), command);
+            assert_eq!(
+                Bindings::load(&restored.overrides()).resolve(Context::File, &key, modifiers),
+                command
+            );
+        }
+        let edited = defaults
+            .edited("push-left", Some(vec![custom("F6")]))
+            .unwrap()
+            .edited("folder-copy-left", Some(vec![custom("F6")]))
+            .unwrap();
+        assert_eq!(
+            edited.resolve(Context::Folder, &Key::Named(Named::F6), Modifiers::empty()),
+            Some(Command::PushLeft)
+        );
+        assert_eq!(
+            edited.resolve(Context::GitDiff, &Key::Named(Named::F6), Modifiers::empty()),
+            Some(Command::PushLeft)
+        );
+        assert!(matches!(
+            edited.edited("help", Some(vec![custom("F6")])),
+            Err(BindingError::Conflict { .. })
+        ));
+        assert!(matches!(
+            edited.edited("folder-delete", Some(vec![custom("Backspace")])),
+            Err(BindingError::Reserved { .. })
+        ));
+        assert!(matches!(
+            edited.edited("help", Some(vec![custom("Primary+Shift+=")])),
+            Err(BindingError::Conflict {
+                action: "zoom-in",
+                ..
+            })
+        ));
+        let reassigned = defaults
+            .edited("refresh", Some(vec![]))
+            .unwrap()
+            .edited("help", Some(vec![custom("F5")]))
+            .unwrap();
+        assert!(matches!(
+            reassigned.edited("refresh", None),
+            Err(BindingError::Conflict { action: "help", .. })
+        ));
+        let disk = meld_config::Settings::from_toml_str("indent-width = 3\n[shortcuts]\nquit = ['Invalid key']\nhelp = ['F10']\nrefresh = ['F6']").unwrap();
+        let map = Bindings::load(&disk.shortcuts);
+        assert_eq!(disk.indent_width, 3);
+        assert_eq!(
+            map.resolve(Context::Folder, &Key::Named(Named::F10), Modifiers::empty()),
+            Some(Command::GearMenu)
+        );
+        assert_eq!(
+            map.resolve(Context::Folder, &Key::Named(Named::F6), Modifiers::empty()),
+            Some(Command::Refresh)
+        );
     }
 
     #[test]

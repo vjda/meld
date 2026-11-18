@@ -71,7 +71,7 @@ fn menu_view<'a>(items: Vec<menu::Item<Message>>) -> Element<'a, Message> {
             } => {
                 let mut r = row![text(label).size(14).width(Length::Fill)].spacing(12);
                 if let Some(s) = shortcut {
-                    r = r.push(text(ui::shortcut_label(s)).size(12).style(ui::dim_text));
+                    r = r.push(text(s).size(12).style(ui::dim_text));
                 }
                 button(r)
                     .width(Length::Fill)
@@ -110,7 +110,7 @@ impl FileDiff {
     pub(super) fn with_popup<'a>(
         &'a self,
         base: Element<'a, Message>,
-        _shared: &'a Shared,
+        shared: &'a Shared,
     ) -> Element<'a, Message> {
         let Some(popup) = self.popup else {
             return base;
@@ -122,22 +122,22 @@ impl FileDiff {
                 vec![
                     menu::Item::Action {
                         label: tr!("Copy change above the left chunk").into(),
-                        shortcut: Some("Alt+["),
+                        shortcut: shared.shortcuts.labels("copy-left-up"),
                         message: act(Act::CopyLeftUp).filter(|_| s.copy_left),
                     },
                     menu::Item::Action {
                         label: tr!("Copy change below the left chunk").into(),
-                        shortcut: Some("Alt+;"),
+                        shortcut: shared.shortcuts.labels("copy-left-down"),
                         message: act(Act::CopyLeftDown).filter(|_| s.copy_left),
                     },
                     menu::Item::Action {
                         label: tr!("Copy change above the right chunk").into(),
-                        shortcut: Some("Alt+]"),
+                        shortcut: shared.shortcuts.labels("copy-right-up"),
                         message: act(Act::CopyRightUp).filter(|_| s.copy_right),
                     },
                     menu::Item::Action {
                         label: tr!("Copy change below the right chunk").into(),
-                        shortcut: Some("Alt+'"),
+                        shortcut: shared.shortcuts.labels("copy-right-down"),
                         message: act(Act::CopyRightDown).filter(|_| s.copy_right),
                     },
                 ],
@@ -178,28 +178,28 @@ impl FileDiff {
                 let mut items = vec![
                     menu::Item::Action {
                         label: tr!("Undo").into(),
-                        shortcut: Some("Ctrl+Z"),
+                        shortcut: shared.shortcuts.labels("undo"),
                         message: act(Act::Undo).filter(|_| self.undo.can_undo()),
                     },
                     menu::Item::Action {
                         label: tr!("Redo").into(),
-                        shortcut: Some("Ctrl+Shift+Z"),
+                        shortcut: shared.shortcuts.labels("redo"),
                         message: act(Act::Redo).filter(|_| self.undo.can_redo()),
                     },
                     menu::Item::Separator,
                     menu::Item::Action {
                         label: tr!("Cut").into(),
-                        shortcut: Some("Ctrl+X"),
+                        shortcut: Some(ui::shortcut_label("Ctrl+X")),
                         message: act(Act::Cut).filter(|_| has_selection && editable),
                     },
                     menu::Item::Action {
                         label: tr!("Copy").into(),
-                        shortcut: Some("Ctrl+C"),
+                        shortcut: Some(ui::shortcut_label("Ctrl+C")),
                         message: act(Act::Copy).filter(|_| has_selection),
                     },
                     menu::Item::Action {
                         label: tr!("Paste").into(),
-                        shortcut: Some("Ctrl+V"),
+                        shortcut: Some(ui::shortcut_label("Ctrl+V")),
                         message: act(Act::Paste).filter(|_| editable),
                     },
                     menu::Item::Separator,

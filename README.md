@@ -104,6 +104,35 @@ blocks it unless it is signed and notarized. `scripts/test-macos-bundle.sh`
 checks the packaging scripts in an isolated temp directory.
 
 
+Customizing keyboard shortcuts
+------------------------------
+
+Open **Main menu → Keyboard Shortcuts**. Search by action or key, then choose
+**Edit** on an action. **Add shortcut** or **Change** starts recording; press a
+chord, then choose **Save** to apply it. **Escape** cancels recording without
+closing the window. **Remove** takes effect immediately; removing the last
+chord leaves the action **Unbound**. **Restore …** brings back one default
+without replacing other bindings; **Reset action** restores all its defaults.
+Changes use the existing `meld/settings.toml` under the platform config
+folder (on macOS, `~/Library/Application Support`).
+
+**Quick macOS check:** Quit the running Meld RS, rebuild from this checkout
+with `scripts/macos-install.sh`, then open the rebuilt **Meld RS**. Use an
+empty comparison tab and start with default bindings for **New comparison**
+and **Open menu**. If macOS handles the suggested function keys itself, use
+its standard F-key mode (or Fn) or pick unused alternatives.
+
+1. Search for **New comparison**. Choose **Edit → Add shortcut**, record
+   **F6**, then **Save**. Close the window and press F6; a new tab should open.
+2. Reopen the editor and choose **Change** next to F6. Record **F10** and
+   choose **Save**. With defaults, the editor should name **Open menu** as
+   the conflict and leave F6 active. Choose **Record again**, record **F7**
+   and save. F7 should now open a tab instead of F6.
+3. Quit and reopen Meld RS. Confirm F7 still opens a tab, then choose
+   **Reset action**. The platform default should work again and F7 should no
+   longer open a tab.
+
+
 Developing
 ----------
 
