@@ -1,6 +1,7 @@
 //! The Meld window (`meldwindow.py`, `meldapp.py`): the tab strip, the main
 //! menu, window-level shortcuts, dialogs and quitting.
 
+use std::cell::RefCell;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -8,9 +9,9 @@ use iced::widget::{button, column, container, row, scrollable, space, text};
 use iced::{Element, Length, Size, Subscription, Task, Theme, keyboard, window};
 
 use crate::cli::Launch;
-use crate::command::{self, Command};
+use crate::command::{self, Command, Context};
 use crate::comparison::Comparison;
-use crate::dialogs;
+use crate::dialogs::{self, shortcuts};
 use crate::instance;
 use crate::shared::Shared;
 use crate::ui::{self, icon, menu};
@@ -41,6 +42,7 @@ pub struct Meld {
     next_id: TabId,
     open_menu: Option<OpenMenu>,
     dialog: Option<Dialog>,
+    recorded_keys: RefCell<Vec<keyboard::key::Physical>>,
     /// The built-in file chooser, when no system one is available.
     chooser: Option<ui::chooser::Dialog>,
     notice: Option<String>,
@@ -58,7 +60,7 @@ pub enum OpenMenu {
 
 enum Dialog {
     Preferences(Box<dialogs::preferences::Preferences>),
-    Shortcuts,
+    Shortcuts(shortcuts::Editor),
     About,
     ConfirmQuit(Vec<String>),
 }
@@ -70,12 +72,15 @@ pub enum Message {
     CloseTab(TabId),
     NewTab,
     Command(Command),
+    IgnoredKey(keyboard::Key, keyboard::Modifiers),
+    FileDiffKey(keyboard::key::Physical, bool, views::filediff::Message),
     Open(Comparison),
     ToggleMenu(OpenMenu),
     CloseMenu,
     ShowDialog(DialogKind),
     CloseDialog,
     Preferences(dialogs::preferences::Message),
+    Shortcuts(shortcuts::Message),
     QuitAnyway,
     WindowOpened(window::Id),
     WindowResized(Size),
@@ -105,6 +110,7 @@ impl Meld {
             next_id: 1,
             open_menu: None,
             dialog: None,
+            recorded_keys: RefCell::default(),
             chooser: None,
             notice: None,
             fullscreen: false,
@@ -247,6 +253,10 @@ impl Meld {
                 self.new_tab()
             }
             Message::Command(command) => self.command(command),
+            Message::IgnoredKey(key, modifiers) => self.ignored_key(&key, modifiers),
+            Message::FileDiffKey(physical, repeat, message) => {
+                self.file_diff_key(physical, repeat, message)
+            }
             Message::Open(comparison) => {
                 self.open_menu = None;
                 self.open(comparison, None, false)
@@ -269,9 +279,25 @@ impl Meld {
                     DialogKind::Preferences => Dialog::Preferences(Box::new(
                         dialogs::preferences::Preferences::new(&self.shared),
                     )),
-                    DialogKind::Shortcuts => Dialog::Shortcuts,
+                    DialogKind::Shortcuts => Dialog::Shortcuts(shortcuts::Editor::default()),
                     DialogKind::About => Dialog::About,
                 });
+                if kind == DialogKind::Shortcuts {
+                    iced::widget::operation::focus(shortcuts::search_id())
+                } else {
+                    Task::none()
+                }
+            }
+            Message::Shortcuts(message) => {
+                let Some(Dialog::Shortcuts(editor)) = &mut self.dialog else {
+                    return Task::none();
+                };
+                if matches!(message, shortcuts::Message::Close) {
+                    return self.update(Message::CloseDialog);
+                }
+                if let Some(edit) = editor.update(message, &self.shared.shortcuts) {
+                    editor.finished(self.shared.edit_shortcut(edit.id, edit.alternatives));
+                }
                 Task::none()
             }
             Message::CloseDialog => {
@@ -553,11 +579,71 @@ impl Meld {
         }
     }
 
+    fn ignored_key(
+        &mut self,
+        key: &keyboard::Key,
+        modifiers: keyboard::Modifiers,
+    ) -> Task<Message> {
+        if self.chooser.is_some() {
+            return Task::none();
+        }
+        let escape = command::from_key(key, modifiers) == Some(Command::Stop);
+        if escape && (self.dialog.is_some() || self.open_menu.is_some()) {
+            return self.command(Command::Stop);
+        }
+        if self.dialog.is_some() {
+            return Task::none();
+        }
+        let context = match self.active_tab().map(|entry| &entry.tab) {
+            Some(Tab::File(_)) => Context::File,
+            Some(Tab::Folder(_)) => Context::Folder,
+            Some(Tab::Vc(_)) => Context::Vc,
+            Some(Tab::Git(tab)) => tab.shortcut_context(),
+            Some(Tab::Image(_)) => Context::Image,
+            _ => Context::New,
+        };
+        if let Some(command) = self.shared.shortcuts.resolve(context, key, modifiers) {
+            return self.command(command);
+        }
+        if let Some(id) = self.active
+            && let Some(TabEntry {
+                tab: Tab::Folder(folder),
+                ..
+            }) = self.tabs.iter_mut().find(|entry| entry.id == id)
+        {
+            folder.dismiss_filters_on_unbound_key(&self.shared.shortcuts, key, modifiers);
+        }
+        Task::none()
+    }
+
+    fn file_diff_key(
+        &self,
+        physical: keyboard::key::Physical,
+        repeat: bool,
+        message: views::filediff::Message,
+    ) -> Task<Message> {
+        if matches!(self.dialog, Some(Dialog::Shortcuts(_)))
+            || repeat && self.recorded_keys.borrow().contains(&physical)
+        {
+            return Task::none();
+        }
+        Task::batch(self.tabs.iter().filter_map(|entry| {
+            let message = match entry.tab {
+                Tab::File(_) => views::Message::File(message.clone()),
+                Tab::Git(_) => {
+                    views::Message::Git(views::gitcompare::Message::Diff(message.clone()))
+                }
+                _ => return None,
+            };
+            Some(Task::done(Message::Tab(entry.id, message)))
+        }))
+    }
+
     pub fn subscription(&self) -> Subscription<Message> {
         let mut subs = vec![
             keyboard::listen().filter_map(|event| match event {
                 keyboard::Event::KeyPressed { key, modifiers, .. } => {
-                    command::from_key(&key, modifiers).map(Message::Command)
+                    Some(Message::IgnoredKey(key, modifiers))
                 }
                 _ => None,
             }),
@@ -568,6 +654,29 @@ impl Meld {
         ];
         if self.chooser.is_some() {
             subs.push(ui::chooser::keys().map(Message::Chooser));
+        }
+        // Timer/mouse subscriptions remain live. Only the file-diff keyboard
+        // observer is absent while the editor owns the window's input.
+        if !matches!(self.dialog, Some(Dialog::Shortcuts(_)))
+            && self
+                .tabs
+                .iter()
+                .any(|entry| matches!(entry.tab, Tab::File(_) | Tab::Git(_)))
+        {
+            subs.push(iced::event::listen_with(|event, status, _window| {
+                let iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key,
+                    modifiers,
+                    physical_key,
+                    repeat,
+                    ..
+                }) = event
+                else {
+                    return None;
+                };
+                views::filediff::observed_key(&key, modifiers, status)
+                    .map(|message| Message::FileDiffKey(physical_key, repeat, message))
+            }));
         }
         for entry in &self.tabs {
             let id = entry.id;
@@ -624,9 +733,9 @@ impl Meld {
                 prefs.view(&self.shared).map(Message::Preferences),
                 Message::CloseDialog,
             ),
-            Some(Dialog::Shortcuts) => ui::modal::modal(
-                base,
-                dialogs::shortcuts(Message::CloseDialog),
+            Some(Dialog::Shortcuts(editor)) => ui::modal::modal(
+                ui::modal::inert(base),
+                editor.view(&self.shared.shortcuts).map(Message::Shortcuts),
                 Message::CloseDialog,
             ),
             Some(Dialog::About) => ui::modal::modal(
@@ -640,14 +749,26 @@ impl Meld {
                 Message::CloseDialog,
             ),
         };
-        match &self.chooser {
+        let page = match &self.chooser {
             Some(chooser) => ui::modal::modal(
                 page,
                 chooser.view().map(Message::Chooser),
                 Message::Chooser(ui::chooser::Message::Ignore),
             ),
             None => page,
-        }
+        };
+        let editor = match &self.dialog {
+            Some(Dialog::Shortcuts(editor)) if self.chooser.is_none() => Some(editor),
+            _ => None,
+        };
+        ui::modal::intercept_keyboard(page, move |event, shell| {
+            if let Some(message) = shortcut_key(editor, &self.recorded_keys, event) {
+                shell.capture_event();
+                if let Some(message) = message {
+                    shell.publish(message);
+                }
+            }
+        })
     }
 
     fn header(&self) -> Element<'_, Message> {
@@ -694,7 +815,7 @@ impl Meld {
         }
         tabs = tabs.push(ui::tool_button(
             icon::ADD,
-            ui::shortcut_label(tr!("New comparison (Ctrl+N)")),
+            self.shared.shortcuts.tip(tr!("New comparison"), "new-tab"),
             Some(Message::NewTab),
         ));
 
@@ -726,7 +847,7 @@ impl Meld {
                 ),
                 ui::tool_button(
                     icon::MENU,
-                    tr!("Main menu (F10)"),
+                    self.shared.shortcuts.tip(tr!("Main menu"), "gear-menu"),
                     Some(Message::ToggleMenu(OpenMenu::Main))
                 ),
             ]
@@ -776,25 +897,28 @@ impl Meld {
             self.fullscreen,
             Message::Command(Command::Fullscreen),
         ));
-        items.push(menu::Item::action(
+        let hint = |label, id, message| {
+            menu::Item::with_hint(label, self.shared.shortcuts.labels(id), Some(message))
+        };
+        items.push(hint(
             tr!("Zoom In"),
-            Some("Ctrl++"),
+            "zoom-in",
             Message::Command(Command::ZoomIn),
         ));
-        items.push(menu::Item::action(
+        items.push(hint(
             tr!("Zoom Out"),
-            Some("Ctrl+-"),
+            "zoom-out",
             Message::Command(Command::ZoomOut),
         ));
-        items.push(menu::Item::action(
+        items.push(hint(
             tr!("Reset Zoom"),
-            Some("Ctrl+0"),
+            "zoom-reset",
             Message::Command(Command::ZoomReset),
         ));
         items.push(menu::Item::Separator);
-        items.push(menu::Item::action(
+        items.push(hint(
             tr!("Preferences"),
-            Some("Ctrl+,"),
+            "preferences",
             Message::ShowDialog(DialogKind::Preferences),
         ));
         items.push(menu::Item::action(
@@ -802,22 +926,14 @@ impl Meld {
             None,
             Message::ShowDialog(DialogKind::Shortcuts),
         ));
-        items.push(menu::Item::action(
-            tr!("Help"),
-            Some("F1"),
-            Message::Command(Command::Help),
-        ));
+        items.push(hint(tr!("Help"), "help", Message::Command(Command::Help)));
         items.push(menu::Item::action(
             tr!("About Meld"),
             None,
             Message::ShowDialog(DialogKind::About),
         ));
         items.push(menu::Item::Separator);
-        items.push(menu::Item::action(
-            tr!("Quit"),
-            Some("Ctrl+Q"),
-            Message::Command(Command::Quit),
-        ));
+        items.push(hint(tr!("Quit"), "quit", Message::Command(Command::Quit)));
         items
     }
 
@@ -831,6 +947,46 @@ impl Meld {
             .map(|(label, comparison)| menu::Item::action(label, None, Message::Open(comparison)))
             .collect()
     }
+}
+
+// Outer option is event ownership; the inner option is the only message,
+// if any, an intercepted event may publish. Retain intercepted physical
+// keys until their next fresh press so a key held at mouse-close cannot replay.
+fn shortcut_key(
+    editor: Option<&shortcuts::Editor>,
+    recorded_keys: &RefCell<Vec<keyboard::key::Physical>>,
+    event: &keyboard::Event,
+) -> Option<Option<Message>> {
+    let recording = editor.is_some_and(shortcuts::Editor::recording);
+    if let keyboard::Event::KeyPressed {
+        key,
+        modifiers,
+        physical_key,
+        repeat,
+        ..
+    } = event
+    {
+        let mut keys = recorded_keys.borrow_mut();
+        if recording && !keys.contains(physical_key) {
+            keys.push(*physical_key);
+        } else if !recording && !repeat {
+            keys.retain(|key| key != physical_key);
+        }
+        if *repeat && keys.contains(physical_key) {
+            return Some(None);
+        }
+        if !recording
+            && editor.is_some()
+            && command::from_key(key, *modifiers) == Some(Command::Stop)
+        {
+            return Some(Some(Message::CloseDialog));
+        }
+    }
+    recording.then(|| {
+        editor
+            .and_then(|editor| editor.record_event(event))
+            .map(Message::Shortcuts)
+    })
 }
 
 fn modal_blocks_folder_delete(modal_open: bool, message: &views::Message) -> bool {
@@ -882,6 +1038,89 @@ mod tests {
         assert!(!super::modal_blocks_folder_delete(false, &delete));
         assert!(super::modal_blocks_folder_delete(true, &delete));
         assert!(!super::modal_blocks_folder_delete(true, &compare));
+    }
+
+    #[test]
+    fn shortcut_capture_owns_escape_delete_and_repeats_without_replay() {
+        use super::*;
+        use crate::command::Bindings;
+        use iced::keyboard::key::{Code, Named, Physical};
+
+        let press = |named, code, repeat| keyboard::Event::KeyPressed {
+            key: keyboard::Key::Named(named),
+            modified_key: keyboard::Key::Named(named),
+            physical_key: Physical::Code(code),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::empty(),
+            text: None,
+            repeat,
+        };
+        let mut editor = shortcuts::Editor::default();
+        let keys = RefCell::default();
+        let bindings = Bindings::default();
+        let escape = press(Named::Escape, Code::Escape, false);
+        let escape_repeat = press(Named::Escape, Code::Escape, true);
+        let delete = press(Named::Delete, Code::Delete, false);
+        let delete_repeat = press(Named::Delete, Code::Delete, true);
+
+        assert!(shortcut_key(None, &keys, &escape).is_none());
+        assert!(shortcut_key(Some(&editor), &keys, &delete).is_none());
+        assert!(matches!(
+            shortcut_key(Some(&editor), &keys, &escape),
+            Some(Some(Message::CloseDialog))
+        ));
+        editor.update(shortcuts::Message::Toggle("help"), &bindings);
+        editor.update(shortcuts::Message::Record(None), &bindings);
+        let Some(Some(Message::Shortcuts(cancel @ shortcuts::Message::Cancel))) =
+            shortcut_key(Some(&editor), &keys, &escape)
+        else {
+            panic!("recording Escape must only emit editor Cancel");
+        };
+        editor.update(cancel, &bindings);
+        assert!(!editor.recording());
+        assert!(matches!(
+            shortcut_key(Some(&editor), &keys, &escape_repeat),
+            Some(None)
+        ));
+        assert!(matches!(
+            shortcut_key(None, &keys, &escape_repeat),
+            Some(None)
+        ));
+        assert!(matches!(
+            shortcut_key(Some(&editor), &keys, &escape),
+            Some(Some(Message::CloseDialog))
+        ));
+
+        editor.update(shortcuts::Message::Record(None), &bindings);
+        assert!(matches!(
+            shortcut_key(Some(&editor), &keys, &delete),
+            Some(Some(Message::Shortcuts(shortcuts::Message::Captured(_))))
+        ));
+        assert!(matches!(
+            shortcut_key(None, &keys, &delete_repeat),
+            Some(None)
+        ));
+        assert!(shortcut_key(None, &keys, &delete).is_none());
+    }
+
+    #[test]
+    fn shortcut_file_observer_preserves_captured_escape_and_ignored_insert() {
+        use crate::views::filediff::{Message, observed_key};
+        use iced::{
+            event::Status,
+            keyboard::{Key, Modifiers, key::Named},
+        };
+        let empty = Modifiers::empty();
+        let escape = Key::Named(Named::Escape);
+        let insert = Key::Named(Named::Insert);
+        assert!(matches!(
+            observed_key(&escape, empty, Status::Captured),
+            Some(Message::CapturedEscape)
+        ));
+        assert!(observed_key(&escape, empty, Status::Ignored).is_none());
+        assert!(observed_key(&insert, empty, Status::Ignored).is_some());
+        assert!(observed_key(&insert, empty, Status::Captured).is_none());
+        assert!(observed_key(&insert, Modifiers::SHIFT, Status::Ignored).is_none());
     }
 
     #[test]

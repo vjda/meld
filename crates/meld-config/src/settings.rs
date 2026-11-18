@@ -6,6 +6,7 @@
 //! default. The `org.gnome.meld.WindowState` keys live in a
 //! `[window-state]` table.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -178,7 +179,28 @@ pub const AILENS_FILE_ROW_SPACING_RANGE: (i32, i32) = (0, 16);
 /// Range of `ailens-file-list-width`.
 pub const AILENS_FILE_LIST_WIDTH_RANGE: (i32, i32) = (120, 1200);
 
-/// All of Meld's settings, one field per gschema key.
+/// Stable action ID to ordered shortcut alternatives. An omitted action
+/// inherits its defaults, while an empty list disables it.
+pub type ShortcutOverrides = BTreeMap<String, Vec<String>>;
+
+fn read_shortcuts<'de, D: serde::Deserializer<'de>>(de: D) -> Result<ShortcutOverrides, D::Error> {
+    let toml::Value::Table(entries) = toml::Value::deserialize(de)? else {
+        log::warn!("Ignoring invalid shortcuts table");
+        return Ok(ShortcutOverrides::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|(id, value)| match value.try_into::<Vec<String>>() {
+            Ok(chords) => Some((id, chords)),
+            Err(_) => {
+                log::warn!("Ignoring invalid shortcut entry '{id}'");
+                None
+            }
+        })
+        .collect())
+}
+
+/// All of Meld's settings, one field per gschema key plus application settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", default)]
 pub struct Settings {
@@ -230,6 +252,26 @@ pub struct Settings {
     pub filename_filters: Vec<FilterSetting>,
     pub text_filters: Vec<FilterSetting>,
     pub window_state: WindowState,
+    #[serde(
+        deserialize_with = "read_shortcuts",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub shortcuts: ShortcutOverrides,
+}
+
+#[cfg(test)]
+#[test]
+fn shortcut_settings_keep_valid_entries_and_other_preferences() {
+    let settings = Settings::from_toml_str(
+        "indent-width = 3\n[shortcuts]\nhelp = []\nrefresh = ['Control+F6']\nquit = 42",
+    )
+    .unwrap();
+    assert_eq!(settings.indent_width, 3);
+    let serialized = settings.to_toml_string().unwrap();
+    assert!(serialized.contains("[shortcuts]"));
+    assert!(serialized.contains("help = []"));
+    assert!(serialized.contains("Control+F6"));
+    assert!(!serialized.contains("quit"));
 }
 
 /// Default `filename-filters`, exactly as in the gschema.
@@ -328,6 +370,7 @@ impl Default for Settings {
             ailens_file_row_spacing: 4,
             ailens_file_list_width: 300,
             window_state: WindowState::default(),
+            shortcuts: ShortcutOverrides::new(),
         }
     }
 }

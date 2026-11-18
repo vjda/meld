@@ -129,7 +129,32 @@ pub fn start_key(key: &Key, modifiers: Modifiers) -> Option<String> {
 
 /// Keys the open search entry handles itself, before the text field
 /// sees them.
-pub fn entry_key(key: &Key, modifiers: Modifiers) -> Option<EntryKey> {
+pub fn entry_key_with_bindings(
+    bindings: &crate::command::Bindings,
+    context: crate::command::Context,
+    key: &Key,
+    modifiers: Modifiers,
+) -> Option<EntryKey> {
+    use crate::command::Command;
+    match bindings.search_step(context, key, modifiers) {
+        Some(Command::FindNext) => return Some(EntryKey::Step(Step::Next)),
+        Some(Command::FindPrevious) => return Some(EntryKey::Step(Step::Previous)),
+        _ => {}
+    }
+    local_entry_key(key, modifiers)
+}
+
+#[cfg(test)]
+fn entry_key(key: &Key, modifiers: Modifiers) -> Option<EntryKey> {
+    entry_key_with_bindings(
+        &crate::command::Bindings::default(),
+        crate::command::Context::Folder,
+        key,
+        modifiers,
+    )
+}
+
+fn local_entry_key(key: &Key, modifiers: Modifiers) -> Option<EntryKey> {
     if super::unsupported_tree_modifiers(modifiers) {
         return None;
     }
@@ -144,13 +169,6 @@ pub fn entry_key(key: &Key, modifiers: Modifiers) -> Option<EntryKey> {
         Key::Named(Named::ArrowUp) => Some(EntryKey::Step(Step::Previous)),
         Key::Named(Named::ArrowDown) => Some(EntryKey::Step(Step::Next)),
         Key::Named(Named::Enter) => Some(EntryKey::Activate),
-        Key::Character(c) if modifiers.command() && c.eq_ignore_ascii_case("g") => {
-            Some(EntryKey::Step(if modifiers.shift() {
-                Step::Previous
-            } else {
-                Step::Next
-            }))
-        }
         _ => None,
     }
 }

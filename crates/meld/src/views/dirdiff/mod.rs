@@ -34,7 +34,7 @@ use meld_files::{
     FolderComparison, FolderOptions, State, StatusFilters, TrashError,
 };
 
-use crate::command::Command;
+use crate::command::{Bindings, Command};
 use crate::comparison::Comparison;
 use crate::shared::Shared;
 use crate::ui::search::{self, EntryKey, Step, TreeSearch};
@@ -1711,6 +1711,23 @@ impl DirDiff {
         }
     }
 
+    pub(crate) fn dismiss_filters_on_unbound_key(
+        &mut self,
+        bindings: &Bindings,
+        key: &Key,
+        modifiers: Modifiers,
+    ) {
+        // Keep Filters dismissible without invoking Stop's dialog or job handling.
+        if bindings.customized("stop")
+            && *key == Key::Named(Named::Escape)
+            && modifiers.is_empty()
+            && self.dialog.is_none()
+            && self.popup == Some(Popup::Filters)
+        {
+            self.popup = None;
+        }
+    }
+
     pub fn command(
         &mut self,
         command: Command,
@@ -1810,75 +1827,72 @@ impl DirDiff {
 
     // --- View -------------------------------------------------------------
 
-    pub fn toolbar<'a>(&'a self, _shared: &'a Shared) -> Element<'a, Message> {
+    pub fn toolbar<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
         let valid = self.selection_valid();
         let pane = self.sel.pane;
         let n = self.panes();
         let mut r = row![space::horizontal()].spacing(2).align_y(iced::Center);
-        r = r.push(tool_button(
+        r = r.push(ui::tool_button(
             "⇔",
-            tr!("Compare selected"),
-            "Return",
+            shared
+                .shortcuts
+                .tip(tr!("Compare selected"), "folder-compare"),
             (!self.sel.is_empty()).then_some(Message::Compare),
         ));
-        r = r.push(tool_button(
+        r = r.push(ui::tool_button(
             icon::LEFT,
-            tr!("Copy to left"),
-            "Alt+Left",
+            shared
+                .shortcuts
+                .tip(tr!("Copy to left"), "folder-copy-left"),
             (valid && pane > 0).then_some(Message::Copy(-1)),
         ));
-        r = r.push(tool_button(
+        r = r.push(ui::tool_button(
             icon::RIGHT,
-            tr!("Copy to right"),
-            "Alt+Right",
+            shared
+                .shortcuts
+                .tip(tr!("Copy to right"), "folder-copy-right"),
             (valid && pane + 1 < n).then_some(Message::Copy(1)),
         ));
-        r = r.push(tool_button(
+        r = r.push(ui::tool_button(
             "✖",
-            tr!("Delete selected"),
-            ui::FOLDER_DELETE_SHORTCUT,
+            shared
+                .shortcuts
+                .tip(tr!("Delete selected"), "folder-delete"),
             valid.then_some(Message::Delete),
         ));
-        r = r.push(tool_button(
+        r = r.push(ui::tool_button(
             icon::FILTER,
-            tr!("Filters"),
-            "F8",
+            shared.shortcuts.tip(tr!("Filters"), "filter"),
             Some(Message::ToggleFilterMenu),
         ));
         if self.busy() {
-            r = r.push(tool_button(
+            r = r.push(ui::tool_button(
                 icon::STOP,
-                tr!("Stop scanning"),
-                "Escape",
+                shared.shortcuts.tip(tr!("Stop scanning"), "stop"),
                 Some(Message::Stop),
             ));
         } else {
-            r = r.push(tool_button(
+            r = r.push(ui::tool_button(
                 icon::REFRESH,
-                tr!("Refresh"),
-                "Ctrl+R",
+                shared.shortcuts.tip(tr!("Refresh"), "refresh"),
                 Some(Message::Refresh),
             ));
         }
         r.into()
     }
 
-    pub fn menu_items(&self, _shared: &Shared) -> Vec<menu::Item<Message>> {
-        self.action_items(true)
+    pub fn menu_items(&self, shared: &Shared) -> Vec<menu::Item<Message>> {
+        self.action_items(true, &shared.shortcuts)
     }
 
-    fn action_items(&self, full: bool) -> Vec<menu::Item<Message>> {
-        fn item(
-            label: &str,
-            shortcut: Option<&'static str>,
-            message: Option<Message>,
-        ) -> menu::Item<Message> {
-            menu::Item::Action {
-                label: label.to_string(),
-                shortcut,
-                message,
-            }
-        }
+    fn action_items(
+        &self,
+        full: bool,
+        bindings: &crate::command::Bindings,
+    ) -> Vec<menu::Item<Message>> {
+        let item = |label: &str, id: Option<&str>, message| {
+            menu::Item::with_hint(label, id.and_then(|id| bindings.labels(id)), message)
+        };
         let valid = self.selection_valid();
         let has_selection = !self.sel.is_empty();
         let pane = self.sel.pane;
@@ -1891,7 +1905,7 @@ impl DirDiff {
         let mut items = vec![
             item(
                 tr!("Compare Selected Files"),
-                Some("Return"),
+                Some("folder-compare"),
                 has_selection.then_some(Message::Compare),
             ),
             item(
@@ -1908,17 +1922,17 @@ impl DirDiff {
             menu::Item::Separator,
             item(
                 tr!("Copy to Left"),
-                Some("Alt+Left"),
+                Some("folder-copy-left"),
                 (valid && pane > 0).then_some(Message::Copy(-1)),
             ),
             item(
                 tr!("Copy to Right"),
-                Some("Alt+Right"),
+                Some("folder-copy-right"),
                 (valid && pane + 1 < n).then_some(Message::Copy(1)),
             ),
             item(
                 tr!("Delete Selected"),
-                Some(ui::FOLDER_DELETE_SHORTCUT),
+                Some("folder-delete"),
                 valid.then_some(Message::Delete),
             ),
             menu::Item::Separator,
@@ -1935,7 +1949,7 @@ impl DirDiff {
             menu::Item::Separator,
             item(
                 tr!("Open Externally"),
-                Some("Ctrl+Shift+O"),
+                Some("open-external"),
                 valid.then_some(Message::OpenExternal),
             ),
             item(
@@ -1949,21 +1963,25 @@ impl DirDiff {
                 menu::Item::Separator,
                 item(
                     tr!("Previous Change"),
-                    Some("Alt+Up"),
+                    Some("previous-change"),
                     Some(Message::Change(false)),
                 ),
                 item(
                     tr!("Next Change"),
-                    Some("Alt+Down"),
+                    Some("next-change"),
                     Some(Message::Change(true)),
                 ),
                 item(
                     tr!("Swap Panes"),
-                    Some("Alt+\\"),
+                    Some("swap-panes"),
                     (n == 2).then_some(Message::Swap),
                 ),
-                item(tr!("Refresh"), Some("Ctrl+R"), Some(Message::Refresh)),
-                item(tr!("Filters"), Some("F8"), Some(Message::ToggleFilterMenu)),
+                item(tr!("Refresh"), Some("refresh"), Some(Message::Refresh)),
+                item(
+                    tr!("Filters"),
+                    Some("filter"),
+                    Some(Message::ToggleFilterMenu),
+                ),
             ]);
         }
         items
@@ -2143,7 +2161,12 @@ impl DirDiff {
                 );
             }
             Some(Popup::Context(point)) => {
-                base = menu::context(base, self.action_items(false), point, Message::ClosePopup);
+                base = menu::context(
+                    base,
+                    self.action_items(false, &shared.shortcuts),
+                    point,
+                    Message::ClosePopup,
+                );
             }
             Some(Popup::Path { .. }) | None => {}
         }
@@ -2452,11 +2475,19 @@ impl DirDiff {
         let dialog_open = self.dialog.is_some();
         keys::KeyListener::new(
             search::overlay(scroller, self.search.as_ref(), Message::SearchInput),
-            move |key, modifiers| tree_key(key, modifiers, searching, dialog_open),
+            move |key, modifiers| {
+                tree_key_with_bindings(&shared.shortcuts, key, modifiers, searching, dialog_open)
+            },
         )
         .intercept(move |key, modifiers| {
             if searching {
-                search::entry_key(key, modifiers).map(Message::SearchKey)
+                search::entry_key_with_bindings(
+                    &shared.shortcuts,
+                    crate::command::Context::Folder,
+                    key,
+                    modifiers,
+                )
+                .map(Message::SearchKey)
             } else {
                 None
             }
@@ -2644,14 +2675,18 @@ impl DirDiff {
 }
 
 /// Routes unconsumed tree keys, leaving deletion to focused inputs and dialogs.
-fn tree_key(
+fn tree_key_with_bindings(
+    bindings: &crate::command::Bindings,
     key: &Key,
     modifiers: Modifiers,
     searching: bool,
     dialog_open: bool,
 ) -> Option<Message> {
     on_key(key, modifiers)
-        .filter(|message| !(searching || dialog_open) || !matches!(message, Message::Delete))
+        .filter(|message| {
+            !matches!(message, Message::Delete)
+                || !searching && !dialog_open && bindings.mac_folder_delete(key, modifiers)
+        })
         .or_else(|| {
             if searching {
                 None
@@ -2739,14 +2774,6 @@ fn absolute(path: &Path) -> PathBuf {
 
 /// A toolbar button like [`ui::tool_button`], whose tooltip is the
 /// translated `tip` followed by its shortcut.
-fn tool_button<'a>(
-    glyph: &'a str,
-    tip: &str,
-    shortcut: &str,
-    on_press: Option<Message>,
-) -> Element<'a, Message> {
-    ui::tool_button(glyph, ui::with_shortcut(tip, shortcut), on_press)
-}
 
 /// Runs a file operation (on a background thread).
 fn execute(op: Op, other_paths: &[PathBuf]) -> OpResult {
@@ -2936,6 +2963,103 @@ mod tests {
         (tab, root, child)
     }
 
+    fn shortcuts_with_remapped_stop() -> Bindings {
+        use crate::command::{Alternative, Chord};
+
+        Bindings::default()
+            .edited(
+                "stop",
+                Some(vec![Alternative::Custom(Chord::parse("F7").unwrap())]),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn shortcut_plain_escape_dismisses_only_filters_when_stop_is_remapped() {
+        use crate::command::Context;
+
+        let (mut tab, root, _) = folder_fixture(vec!["left".into(), "right".into()]);
+        let default = Bindings::default();
+        let remapped = shortcuts_with_remapped_stop();
+        let escape = Key::Named(Named::Escape);
+        let plain = Modifiers::empty();
+        tab.popup = Some(Popup::Filters);
+        tab.search = Some(TreeSearch::new("query".into()));
+        let canceled = Arc::new(AtomicBool::new(false));
+        tab.jobs.push(Job {
+            id: 1,
+            base: root,
+            root: true,
+            cancel: canceled.clone(),
+            differences: false,
+        });
+
+        assert_eq!(
+            default.resolve(Context::Folder, &escape, plain),
+            Some(Command::Stop)
+        );
+        tab.dismiss_filters_on_unbound_key(&default, &escape, plain);
+        assert_eq!(tab.popup, Some(Popup::Filters));
+        assert_eq!(
+            remapped.resolve(Context::Folder, &Key::Named(Named::F7), plain),
+            Some(Command::Stop)
+        );
+        for modified in [
+            Modifiers::SHIFT,
+            Modifiers::ALT,
+            Modifiers::CTRL,
+            Modifiers::LOGO,
+        ] {
+            tab.dismiss_filters_on_unbound_key(&remapped, &escape, modified);
+            assert_eq!(tab.popup, Some(Popup::Filters));
+        }
+        assert_eq!(remapped.resolve(Context::Folder, &escape, plain), None);
+        tab.dismiss_filters_on_unbound_key(&remapped, &escape, plain);
+        assert_eq!(
+            tab.popup, None,
+            "plain Escape must dismiss Filters after remapping Stop"
+        );
+        assert!(tab.search.is_some());
+        assert!(!canceled.load(Ordering::Relaxed));
+
+        // A second Escape with no Filters must not affect search or a scan.
+        tab.dismiss_filters_on_unbound_key(&remapped, &escape, plain);
+        assert!(tab.search.is_some());
+        assert!(!canceled.load(Ordering::Relaxed));
+        let other = Popup::Context(Point::ORIGIN);
+        tab.popup = Some(other);
+        tab.dismiss_filters_on_unbound_key(&remapped, &escape, plain);
+        assert_eq!(tab.popup, Some(other));
+    }
+
+    #[test]
+    fn shortcut_plain_escape_preserves_folder_confirmation_and_queue() {
+        let (mut tab, _, node) = folder_fixture(vec!["left".into(), "right".into()]);
+        let delete = |path: &str| Op::Delete {
+            node,
+            path: path.into(),
+            permanently: false,
+        };
+        tab.dialog = Some(Dialog::DeletePermanently {
+            op: delete("left/file"),
+            path: "left/file".into(),
+        });
+        tab.ops.push_back(delete("right/file"));
+        tab.popup = Some(Popup::Filters);
+
+        tab.dismiss_filters_on_unbound_key(
+            &shortcuts_with_remapped_stop(),
+            &Key::Named(Named::Escape),
+            Modifiers::empty(),
+        );
+        assert_eq!(tab.popup, Some(Popup::Filters));
+        assert!(matches!(tab.dialog, Some(Dialog::DeletePermanently { .. })));
+        assert_eq!(tab.ops.len(), 1);
+        assert!(
+            matches!(tab.ops.front(), Some(Op::Delete { path, .. }) if path == Path::new("right/file"))
+        );
+    }
+
     #[test]
     fn mac_shortcut_regression_folder_activation_compares_selected_files() {
         let dir = tempfile::tempdir().unwrap();
@@ -2968,8 +3092,9 @@ mod tests {
             std::fs::write(root.join("file"), "contents").unwrap();
         }
         let (mut tab, root, child) = folder_fixture(roots.clone());
+        let bindings = crate::command::Bindings::default();
         let delete_item = tab
-            .action_items(false)
+            .action_items(false, &bindings)
             .into_iter()
             .find(|item| {
                 matches!(
@@ -2984,19 +3109,10 @@ mod tests {
         assert!(matches!(
             delete_item,
             menu::Item::Action {
-                shortcut: Some(ui::FOLDER_DELETE_SHORTCUT),
+                shortcut: Some(keys),
                 ..
-            }
+            } if keys == if cfg!(target_os = "macos") { "Delete, Cmd+Delete" } else { "Delete" }
         ));
-        let expected_tip = if cfg!(target_os = "macos") {
-            "Delete selected (Cmd+Delete)"
-        } else {
-            "Delete selected (Delete)"
-        };
-        assert_eq!(
-            ui::with_shortcut("Delete selected", ui::FOLDER_DELETE_SHORTCUT),
-            expected_tip
-        );
         tab.sel.clear();
         let _ = tab.queue_delete();
         assert!(tab.ops.is_empty());

@@ -1350,25 +1350,8 @@ impl FileDiff {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let mut subs = vec![
-            iced::event::listen_with(|event, status, _window| match event {
-                iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
-                    match (key.as_ref(), status) {
-                        (
-                            keyboard::Key::Named(keyboard::key::Named::Escape),
-                            iced::event::Status::Captured,
-                        ) => Some(Message::CapturedEscape),
-                        (
-                            keyboard::Key::Named(keyboard::key::Named::Insert),
-                            iced::event::Status::Ignored,
-                        ) if modifiers.is_empty() => Some(Message::Act(Act::ToggleOverwrite)),
-                        _ => None,
-                    }
-                }
-                _ => None,
-            }),
-            iced::time::every(std::time::Duration::from_secs(2)).map(|_| Message::CheckDisk),
-        ];
+        let mut subs =
+            vec![iced::time::every(std::time::Duration::from_secs(2)).map(|_| Message::CheckDisk)];
         if self.is_loading() {
             subs.push(
                 iced::time::every(std::time::Duration::from_millis(120)).map(|_| Message::Spin),
@@ -1765,5 +1748,25 @@ mod tests {
             ),
             "foo (working, repository)"
         );
+    }
+}
+
+/// Window events also reach inactive tabs; the window gates this observer
+/// before invoking it so modal recording is not mistaken for pane capture.
+pub(crate) fn observed_key(
+    key: &keyboard::Key,
+    modifiers: keyboard::Modifiers,
+    status: iced::event::Status,
+) -> Option<Message> {
+    match (key.as_ref(), status) {
+        (keyboard::Key::Named(keyboard::key::Named::Escape), iced::event::Status::Captured) => {
+            Some(Message::CapturedEscape)
+        }
+        (keyboard::Key::Named(keyboard::key::Named::Insert), iced::event::Status::Ignored)
+            if modifiers.is_empty() =>
+        {
+            Some(Message::Act(Act::ToggleOverwrite))
+        }
+        _ => None,
     }
 }
