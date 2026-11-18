@@ -2,6 +2,7 @@
 //! menu, window-level shortcuts, dialogs and quitting.
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -201,6 +202,14 @@ impl Meld {
     fn new_tab(&mut self) -> Task<Message> {
         let tab = Tab::new_comparison(&self.shared);
         self.add_tab(tab, Task::none(), None, false)
+    }
+
+    fn open_blank_folder_comparison(&mut self, panes: usize) -> Task<Message> {
+        self.update(Message::Open(Comparison::Folders {
+            paths: vec![PathBuf::new(); panes],
+            labels: Vec::new(),
+            auto_compare: false,
+        }))
     }
 
     fn open(
@@ -522,6 +531,8 @@ impl Meld {
             Command::NewBlankFile3Way => {
                 self.update(Message::Open(Comparison::files(vec![None; 3])))
             }
+            Command::NewBlankFolder2Way => self.open_blank_folder_comparison(2),
+            Command::NewBlankFolder3Way => self.open_blank_folder_comparison(3),
             Command::Preferences => self.update(Message::ShowDialog(DialogKind::Preferences)),
             Command::Help => {
                 let _ = open::that_detached("https://meld.app/help/");
@@ -1083,6 +1094,40 @@ mod tests {
                 .iter()
                 .any(|tab| tab.id == chooser && matches!(&tab.tab, Tab::New(_)))
         );
+    }
+
+    #[test]
+    fn blank_comparison_shortcuts_open_blank_folder_tabs() {
+        use super::*;
+        use crate::command::Bindings;
+        use iced::keyboard::{Key, Modifiers, key::Named};
+
+        let (mut app, _) = Meld::boot();
+        app.shared.shortcuts = Bindings::load(
+            &[
+                ("new-blank-folder-2-way".into(), vec!["F6".into()]),
+                ("new-blank-folder-3-way".into(), vec!["F12".into()]),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        for (key, pane_count) in [(Named::F6, 2), (Named::F12, 3)] {
+            let previous = app.active_tab().unwrap().id;
+            let prior_count = app.tabs.len();
+            let _ = app.update(Message::IgnoredKey(Key::Named(key), Modifiers::empty()));
+            assert_eq!(app.tabs.len(), prior_count + 1);
+            let active = app.active_tab().unwrap();
+            assert_ne!(active.id, previous);
+            assert!(app.tabs.iter().any(|entry| entry.id == previous));
+            let Tab::Folder(diff) = &active.tab else {
+                panic!("shortcut did not open a folder comparison");
+            };
+            assert_eq!(
+                diff.tooltip().lines().skip(1).collect::<Vec<_>>(),
+                vec![tr!("No folder"); pane_count]
+            );
+        }
     }
 
     #[test]

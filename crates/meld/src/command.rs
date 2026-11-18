@@ -38,6 +38,8 @@ pub enum Command {
     NewTab,
     NewBlankFile2Way,
     NewBlankFile3Way,
+    NewBlankFolder2Way,
+    NewBlankFolder3Way,
     NextTab,
     PreviousTab,
     SelectTab(usize),

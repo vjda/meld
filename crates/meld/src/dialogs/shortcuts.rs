@@ -545,17 +545,20 @@ mod tests {
     }
 
     #[test]
-    fn blank_file_comparison_shortcuts_follow_new_comparison_and_start_unbound() {
+    fn blank_comparison_shortcuts_follow_new_comparison_and_start_unbound() {
         let index = ACTIONS.iter().position(|a| a.id == "new-tab").unwrap();
-        let (new_tab, blank_actions) = ACTIONS[index..].split_first().unwrap();
+        let ids = [
+            "new-blank-file-2-way",
+            "new-blank-file-3-way",
+            "new-blank-folder-2-way",
+            "new-blank-folder-3-way",
+        ];
+        let blank_actions = &ACTIONS[index + 1..][..ids.len()];
         let mut f = Fixture::new();
 
-        for (action, id) in blank_actions
-            .iter()
-            .zip(["new-blank-file-2-way", "new-blank-file-3-way"])
-        {
+        for (action, id) in blank_actions.iter().zip(ids) {
             assert_eq!(action.id, id);
-            assert_eq!((action.group)(), (new_tab.group)());
+            assert_eq!((action.group)(), (ACTIONS[index].group)());
             assert!(f.bindings.alternatives(action).is_empty());
 
             f.send(Message::Toggle(id));
