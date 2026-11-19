@@ -1432,7 +1432,6 @@ impl VcView {
                 .tip(tr!("Show the console output"), "vc-console")
         };
         row![
-            space::horizontal(),
             ui::tool_button(
                 icon::UP,
                 shared

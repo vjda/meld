@@ -7,6 +7,7 @@ pub mod menu;
 pub mod modal;
 pub mod pathlabel;
 pub mod search;
+pub mod wheel;
 
 use iced::widget::{button, container, text, tooltip};
 use iced::{Background, Border, Color, Element, Length, Theme};

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, Ordering};
 
-use iced::widget::{button, column, container, row, scrollable, space, text};
+use iced::widget::{Space, button, column, container, row, scrollable, text};
 use iced::{Element, Length, Size, Subscription, Task, Theme, keyboard, window};
 
 use crate::cli::Launch;
@@ -844,19 +844,19 @@ impl Meld {
                     .toolbar(&self.shared)
                     .map(move |m| Message::Tab(id, m))
             }
-            None => space::horizontal().into(),
+            None => Space::new().into(),
         };
 
         container(
             row![
-                scrollable(tabs)
-                    .direction(scrollable::Direction::Horizontal(
-                        scrollable::Scrollbar::new().width(2).scroller_width(2)
-                    ))
-                    .width(Length::FillPortion(3)),
-                container(toolbar)
-                    .width(Length::FillPortion(2))
-                    .align_right(Length::FillPortion(2)),
+                ui::wheel::horizontal(
+                    scrollable(tabs)
+                        .direction(scrollable::Direction::Horizontal(
+                            scrollable::Scrollbar::new().width(2).scroller_width(2)
+                        ))
+                        .width(Length::Fill),
+                ),
+                container(toolbar),
                 ui::tool_button(
                     "🕘",
                     tr!("Recent comparisons"),
