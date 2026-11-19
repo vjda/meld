@@ -2021,7 +2021,7 @@ impl GitCompare {
         if self.content == Content::Diff {
             self.diff.toolbar(shared).map(Message::Diff)
         } else {
-            space::horizontal().into()
+            iced::widget::Space::new().into()
         }
     }
 

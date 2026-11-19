@@ -10,9 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use iced::widget::image::{FilterMethod, Handle};
-use iced::widget::{
-    column, container, image, mouse_area, row, scrollable, space, stack, text, tooltip,
-};
+use iced::widget::{column, container, image, mouse_area, row, scrollable, stack, text, tooltip};
 use iced::{Background, ContentFit, Element, Length, Subscription, Task, Theme};
 
 use crate::command::Command;
@@ -300,7 +298,6 @@ impl ImageDiff {
             Zoom::Scale(s) => format!("{:.0}%", s * 100.0),
         };
         row![
-            space::horizontal(),
             text(scale_label).size(13).style(ui::dim_text),
             ui::tool_button("−", tr!("Zoom out"), Some(Message::ZoomOut)),
             ui::tool_button("+", tr!("Zoom in"), Some(Message::ZoomIn)),

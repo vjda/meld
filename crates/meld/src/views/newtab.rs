@@ -293,7 +293,7 @@ impl NewTab {
     }
 
     pub fn toolbar<'a>(&'a self, _shared: &'a Shared) -> Element<'a, Message> {
-        space::horizontal().into()
+        iced::widget::Space::new().into()
     }
 
     pub fn menu_items(&self, _shared: &Shared) -> Vec<menu::Item<Message>> {

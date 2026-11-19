@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use iced::keyboard::{Key, Modifiers, key::Named};
 use iced::widget::{
-    Space, button, column, container, mouse_area, row, scrollable, space, stack, text, tooltip,
+    Space, button, column, container, mouse_area, row, scrollable, stack, text, tooltip,
 };
 use iced::{Background, Border, Color, Element, Font, Length, Point, Subscription, Task, Theme};
 use meld_config::{FilterSetting, Settings, StatusColors};
@@ -1831,7 +1831,7 @@ impl DirDiff {
         let valid = self.selection_valid();
         let pane = self.sel.pane;
         let n = self.panes();
-        let mut r = row![space::horizontal()].spacing(2).align_y(iced::Center);
+        let mut r = row![].spacing(2).align_y(iced::Center);
         r = r.push(ui::tool_button(
             "⇔",
             shared
