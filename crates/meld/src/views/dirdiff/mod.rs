@@ -15,6 +15,7 @@ mod keys;
 mod linkmap;
 mod model;
 mod scan;
+mod scroll;
 
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -2465,11 +2466,14 @@ impl DirDiff {
         }
         list = list.push(Space::new().height((total - last) as f32 * self.row_height));
 
-        let scroller = scrollable(list)
-            .id(self.scroll_id.clone())
-            .on_scroll(Message::Scrolled)
-            .width(Length::Fill)
-            .height(Length::Fill);
+        let scroller = scroll::restore_on_mount(
+            scrollable(list)
+                .on_scroll(Message::Scrolled)
+                .width(Length::Fill)
+                .height(Length::Fill),
+            self.scroll_id.clone(),
+            self.scroll_y,
+        );
 
         let searching = self.search.is_some();
         let dialog_open = self.dialog.is_some();
@@ -2820,6 +2824,23 @@ fn execute(op: Op, other_paths: &[PathBuf]) -> OpResult {
                 },
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl DirDiff {
+    pub(crate) fn populated_for_scroll_test(roots: Vec<PathBuf>, shared: &mut Shared) -> Self {
+        let (mut folder, _) = Self::new(roots, Vec::new(), false, shared);
+        let items = folder.comparison.walk(&folder.roots).collect();
+        let job = folder.jobs[0].id;
+        let mut events = Vec::new();
+        let _ = folder.handle_scan(
+            job,
+            ScanEvent::Items(Arc::new(items), String::new()),
+            &mut events,
+        );
+        let _ = folder.handle_scan(job, ScanEvent::Done { cancelled: false }, &mut events);
+        folder
     }
 }
 
