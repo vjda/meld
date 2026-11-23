@@ -1046,6 +1046,9 @@ fn window_icon() -> Option<window::Icon> {
 }
 
 #[cfg(test)]
+mod folder_scroll;
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn blank_file_comparison_shortcuts_open_separate_tabs_with_the_requested_panes() {
