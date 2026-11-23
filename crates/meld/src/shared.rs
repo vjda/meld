@@ -58,6 +58,25 @@ impl Shared {
         shared
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Self {
+        let settings = Settings::default();
+        let schemes = SchemeManager::builtin();
+        let style = meld_config::Theme::from_settings(&schemes, &settings, false);
+        Self {
+            settings,
+            shortcuts: Bindings::default(),
+            schemes,
+            theme: iced_theme(&style),
+            style,
+            recent: RecentComparisons::default(),
+            zoom: 0.0,
+            system_dark: false,
+            system_monospace: None,
+            mono_font: Font::MONOSPACE,
+        }
+    }
+
     pub fn initial_window_size() -> iced::Size {
         let state = Settings::load().window_state;
         let size = |value: i32, default: f32, min: f32| {
