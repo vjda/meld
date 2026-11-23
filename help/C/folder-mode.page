@@ -47,6 +47,12 @@ properly if they're text files!
 </p>
 
 <p>
+In a two-folder comparison, right-click a row that contains a subfolder in
+both panes. Choose <gui>Compare Subfolders</gui>. Meld opens the two subfolders
+in a new tab and leaves the original comparison unchanged.
+</p>
+
+<p>
 There are bars on the right-hand side of the window that show
 you a simple colored summary of the comparison results. Each file or
 folder in the comparison corresponds to a small section of these bars,

@@ -195,6 +195,7 @@ pub enum Message {
     Modifiers(Modifiers),
     Scrolled(scrollable::Viewport),
     Compare,
+    CompareSubfolders,
     Mark,
     CompareMarked,
     Copy(isize),
@@ -1092,6 +1093,21 @@ impl DirDiff {
         }
     }
 
+    fn selected_subfolder(&self) -> Option<NodeId> {
+        // Archive folders are tied to this tab's lifetime.
+        if self.panes() != 2 || self.archives.iter().any(Option::is_some) || self.sel.len() != 1 {
+            return None;
+        }
+        let id = *self.selected().first()?;
+        if Some(id) == self.tree.root() {
+            return None;
+        }
+        let [left, right] = self.tree.row(id)?.status.panes.as_slice() else {
+            return None;
+        };
+        (left.exists && left.is_dir && right.exists && right.is_dir).then_some(id)
+    }
+
     /// `on_treeview_row_activated()`: files are compared, folders expand
     /// or collapse; a missing entry uses the neighbouring pane.
     fn activate(&mut self, id: NodeId, pane: usize, events: &mut Vec<Event>) {
@@ -1488,6 +1504,17 @@ impl DirDiff {
                     if let Some(comparison) = self.comparison_for(id) {
                         events.push(Event::Open(comparison));
                     }
+                }
+            }
+            Message::CompareSubfolders => {
+                self.popup = None;
+                // Recheck the paths: the scan may no longer match the filesystem.
+                if let Some(id) = self.selected_subfolder()
+                    && let Some(comparison) = self.comparison_for(id)
+                    && matches!(&comparison, Comparison::Folders { paths, .. }
+                        if paths.iter().all(|path| path.is_dir()))
+                {
+                    events.push(Event::Open(comparison));
                 }
             }
             Message::Mark => {
@@ -1959,6 +1986,12 @@ impl DirDiff {
                 has_selection.then_some(Message::CopyPaths),
             ),
         ];
+        if !full && self.selected_subfolder().is_some() {
+            items.insert(
+                1,
+                menu::Item::action(tr!("Compare Subfolders"), None, Message::CompareSubfolders),
+            );
+        }
         if full {
             items.extend([
                 menu::Item::Separator,
@@ -2982,6 +3015,128 @@ mod tests {
             next_archive: 1,
         };
         (tab, root, child)
+    }
+
+    fn subfolder_action(items: Vec<menu::Item<Message>>) -> Option<Message> {
+        items.into_iter().find_map(|item| match item {
+            menu::Item::Action { label, message, .. } if label == tr!("Compare Subfolders") => {
+                message
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn compare_subfolders_opens_an_ordered_pair_from_either_pane() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = vec![dir.path().join("left"), dir.path().join("right")];
+        let paths: Vec<_> = roots.iter().map(|root| root.join("file")).collect();
+        for path in &paths {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        let (mut tab, root, child) = folder_fixture(roots);
+        let mut shared = Shared::for_test();
+        let original = tab.tooltip();
+        assert!(subfolder_action(tab.menu_items(&shared)).is_none());
+        for pane in [0, 1] {
+            tab.sel.set(root);
+            let mut events = Vec::new();
+            let _ = tab.update(
+                Message::RowRightPressed(pane, child),
+                &mut shared,
+                &mut events,
+            );
+            let point = Point::ORIGIN;
+            let _ = tab.update(Message::ContextMenu(point), &mut shared, &mut events);
+            assert_eq!(tab.popup, Some(Popup::Context(point)));
+            let action = subfolder_action(tab.action_items(false, &shared.shortcuts))
+                .expect("a paired subfolder row offers Compare Subfolders");
+            let _ = tab.update(action, &mut shared, &mut events);
+            assert!(
+                matches!(events.as_slice(), [Event::Open(Comparison::Folders {
+                paths: opened, labels, auto_compare: false,
+            })] if opened == &paths && labels.is_empty())
+            );
+            assert_eq!(tab.tooltip(), original);
+            assert_eq!(tab.selected(), [child]);
+            assert_eq!(tab.popup, None);
+        }
+    }
+
+    #[test]
+    fn compare_subfolders_requires_a_single_paired_subfolder_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots: Vec<_> = ["left", "right", "third"]
+            .into_iter()
+            .map(|name| dir.path().join(name))
+            .collect();
+        for root in &roots {
+            std::fs::create_dir_all(root.join("file")).unwrap();
+        }
+        let mut shared = Shared::for_test();
+        for panes in [1, 3] {
+            let (tab, _, _) = folder_fixture(roots[..panes].to_vec());
+            assert!(subfolder_action(tab.action_items(false, &shared.shortcuts)).is_none());
+        }
+        let (mut tab, root, child) = folder_fixture(roots[..2].to_vec());
+        let action = subfolder_action(tab.action_items(false, &shared.shortcuts))
+            .expect("a paired subfolder row offers Compare Subfolders");
+        let mut events = Vec::new();
+        tab.sel.set(root);
+        assert!(subfolder_action(tab.action_items(false, &shared.shortcuts)).is_none());
+        let _ = tab.update(action.clone(), &mut shared, &mut events);
+        tab.sel.select_all(&tab.visible_ids);
+        assert!(subfolder_action(tab.action_items(false, &shared.shortcuts)).is_none());
+        let _ = tab.update(action.clone(), &mut shared, &mut events);
+        tab.sel.set(child);
+
+        // The row still shows two directories when one disappears from disk.
+        let right = roots[1].join("file");
+        std::fs::rename(&right, roots[1].join("renamed")).unwrap();
+        let _ = tab.update(action.clone(), &mut shared, &mut events);
+        let paths = &tab.tree.row(child).unwrap().paths;
+        tab.tree.set_status(child, tab.comparison.row_status(paths));
+        assert!(subfolder_action(tab.action_items(false, &shared.shortcuts)).is_none());
+        let _ = tab.update(action.clone(), &mut shared, &mut events);
+
+        // A file in the right pane must not become a folder comparison.
+        std::fs::write(right, "contents").unwrap();
+        let paths = &tab.tree.row(child).unwrap().paths;
+        tab.tree.set_status(child, tab.comparison.row_status(paths));
+        assert!(subfolder_action(tab.action_items(false, &shared.shortcuts)).is_none());
+        let _ = tab.update(action, &mut shared, &mut events);
+        assert!(events.is_empty());
+        assert_eq!(tab.selected(), [child]);
+    }
+
+    #[test]
+    fn compare_subfolders_preserves_context_file_comparison() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = vec![dir.path().join("left"), dir.path().join("right")];
+        let paths: Vec<_> = roots.iter().map(|root| Some(root.join("file"))).collect();
+        for (root, path) in roots.iter().zip(paths.iter().flatten()) {
+            std::fs::create_dir(root).unwrap();
+            std::fs::write(path, "contents").unwrap();
+        }
+        let (mut tab, _, child) = folder_fixture(roots);
+        let row = tab.tree.row(child).unwrap();
+        tab.tree
+            .set_status(child, tab.comparison.row_status(&row.paths));
+        let mut shared = Shared::for_test();
+        let items = tab.action_items(false, &shared.shortcuts);
+        assert!(subfolder_action(items.clone()).is_none());
+        let action = items.into_iter().find_map(|item| match item {
+            menu::Item::Action { label, message, .. } if label == tr!("Compare Selected Files") => {
+                message
+            }
+            _ => None,
+        });
+        let mut events = Vec::new();
+        let _ = tab.update(action.unwrap(), &mut shared, &mut events);
+        assert!(
+            matches!(events.as_slice(), [Event::Open(Comparison::Files { paths: opened, .. })]
+            if opened == &paths)
+        );
     }
 
     fn shortcuts_with_remapped_stop() -> Bindings {
